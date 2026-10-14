@@ -218,3 +218,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project-Specific
+.claude/
+claude-docs/
+my-notes/
+CLAUDE.md
+
+# Generated data
+data/
