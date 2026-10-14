@@ -1,7 +1,5 @@
-# On The Efficacy of Loop-Level-Patching
+# time loops: the clock algorithm in looped models
 
-Investigating the efficacy of activation patching at the level of loop iteration in recurrent-depth language modeling architectures.
+code is MIT licensed.
 
-Code is MIT licensed.
-
-correpondence to: [aopatric@mit.edu](mailto:aopatric@mit.edu)
+correspondence to: [aopatric@mit.edu](mailto:aopatric@mit.edu)
