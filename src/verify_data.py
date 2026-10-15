@@ -80,10 +80,7 @@ def _check_row(rep, file, row, p):
     for x in ops[1:]:
         s = (s + x) % p
         sums.append(s)
-    toks = []
-    for i, x in enumerate(ops):
-        toks += (["+"] if i else []) + [str(x)]
-    toks.append("=")
+    toks = [str(x) for x in ops] + ["="]
     if row["hop"] != len(ops) - 1:
         rep.bad(f"{file}: hop != len(operands)-1", ops)
     if row["intermediates"] != sums or row["answer"] != sums[-1]:

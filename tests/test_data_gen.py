@@ -242,16 +242,15 @@ def test_uniformity_check_rejects_naive_sampler():
 def test_make_row_example():
     """a known chain produces the expected row."""
     row = dg.make_row((31, 3, 40), 113)
-    assert row == {"hop": 2, "operands": [31, 3, 40], "tokens": ["31", "+", "3", "+", "40", "="],
+    assert row == {"hop": 2, "operands": [31, 3, 40], "tokens": ["31", "3", "40", "="],
                    "answer": 74, "intermediates": [34, 74]}
 
 
 def test_vocab_layout():
-    """the vocab has pad, bos, the p numbers, then + and =, with contiguous ids."""
+    """the vocab is the p numbers at their own value as id, then =."""
     v = dg.make_vocab(113)
-    assert v["<pad>"] == 0 and v["<bos>"] == 1 and v["0"] == 2 and v["112"] == 114
-    assert v["+"] == 115 and v["="] == 116 and len(v) == 117
-    assert sorted(v.values()) == list(range(117))
+    assert all(v[str(i)] == i for i in range(113))
+    assert v["="] == 113 and len(v) == 114
 
 
 # invariants on a generated dataset

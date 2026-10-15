@@ -3,7 +3,7 @@
 import random
 from dataclasses import dataclass, field
 
-GENERATOR_VERSION = "2.0.0"
+GENERATOR_VERSION = "3.0.0"
 
 FILES = (
     "train.jsonl",
@@ -356,15 +356,10 @@ def make_tokens(operands) -> list:
     args:
         operands: chain operands.
     returns:
-        token strings like ["3", "+", "5", "="].
+        token strings like ["3", "5", "="].
     """
-    toks = []
-    for i, x in enumerate(operands):
-        if i:
-            toks.append("+")
-        toks.append(str(x))
-    toks.append("=")
-    return toks
+    # no operator token: addition is the only op, so "+" would carry no information
+    return [str(x) for x in operands] + ["="]
 
 
 def make_row(operands, p: int, **extra) -> dict:
@@ -395,14 +390,12 @@ def make_vocab(p: int) -> dict:
     args:
         p: prime modulus.
     returns:
-        dict from token to id: <pad>, <bos>, "0".."p-1", "+", "=".
+        dict from token to id: "0".."p-1" at their own value, then "=" at p.
     """
-    # <bos> is reserved here but never written into rows; the collator prepends it
-    vocab = {"<pad>": 0, "<bos>": 1}
-    for i in range(p):
-        vocab[str(i)] = len(vocab)
-    vocab["+"] = len(vocab)
-    vocab["="] = len(vocab)
+    # id == value keeps the embedding rows in number order for fourier analysis;
+    # no special tokens, since the model only ever predicts the answer at "="
+    vocab = {str(i): i for i in range(p)}
+    vocab["="] = p
     return vocab
 
 
