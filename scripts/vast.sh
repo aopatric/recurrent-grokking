@@ -1,22 +1,38 @@
 #!/usr/bin/env bash
-# run training suites on a rented gpu machine over ssh, and copy the results back.
+# run training suites on a rented gpu machine over ssh, and stream the results back.
 #
-#   scripts/vast.sh push   HOST PORT            ship the committed code and the data, install the environment
-#   scripts/vast.sh smoke  HOST PORT ARGS...    a few steps of each distinct config (src/smoke.py ARGS)
-#   scripts/vast.sh launch HOST PORT ARGS...    start the runner in the background (src/suite.py ARGS)
-#   scripts/vast.sh status HOST PORT            runner state, gpu use and the verdict table
-#   scripts/vast.sh pull   HOST PORT            copy runs/ back into the local runs/; safe to repeat
-#   scripts/vast.sh stop   HOST PORT            pause every running job at its next step
-#   scripts/vast.sh shell  HOST PORT            open a shell in the remote checkout
+#   scripts/vast.sh up     HOST PORT [OPTS] ARGS...   push, smoke test, launch, then watch until done
+#   scripts/vast.sh push   HOST PORT                  ship the committed code and the data, install the environment
+#   scripts/vast.sh smoke  HOST PORT ARGS...          a few steps of each distinct config (src/smoke.py ARGS)
+#   scripts/vast.sh launch HOST PORT ARGS...          start the runner in the background (src/suite.py ARGS)
+#   scripts/vast.sh watch  HOST PORT [OPTS]           stream runs/ back every few seconds until nothing is running
+#   scripts/vast.sh status HOST PORT                  live jobs, the runner log, gpu use and verdicts per config
+#   scripts/vast.sh pull   HOST PORT [--into DIR]     copy runs/ back once, checkpoints included
+#   scripts/vast.sh stop   HOST PORT                  pause every running job at its next step
+#   scripts/vast.sh shell  HOST PORT                  open a shell in the remote checkout
 #
+# OPTS: --into DIR (default runs/vast), --every SECONDS (default 60), --no-smoke (up only).
+# ARGS for up and launch are src/suite.py arguments, e.g. --suite tier1 tier2 --until 20000.
 # env: VAST_USER (default root), VAST_DIR (default /workspace), ALLOW_DIRTY=1 to ship HEAD despite uncommitted
 # changes to tracked files.
 set -euo pipefail
 
-usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 2; }
 [ $# -ge 3 ] || usage
 cmd=$1 host=$2 port=$3
 shift 3
+
+# options shared by up, watch and pull; everything else is passed on
+into=runs/vast every=60 smoke=1 rest=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --into) into=$2; shift 2 ;;
+    --every) every=$2; shift 2 ;;
+    --no-smoke) smoke=0; shift ;;
+    *) rest+=("$1"); shift ;;
+  esac
+done
+set -- ${rest[@]+"${rest[@]}"}
 
 user=${VAST_USER:-root}
 base=${VAST_DIR:-/workspace}
@@ -31,6 +47,16 @@ mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
 remote() { ssh "${ssh_opts[@]}" "$target" "export PATH=\$HOME/.local/bin:\$PATH; set -euo pipefail; $1"; }
 sync_up() { rsync -az --info=stats1 -e "ssh ${ssh_opts[*]}" "$@"; }
 quote() { printf '%q ' "$@"; }
+
+# copy the instance's runs/ into $into. files are rewritten in place, so a tensorboard reading them keeps
+# seeing new events; checkpoints are left for the final copy unless $1 is "full"
+fetch() {
+  local skip=(--exclude suite.pid --exclude train.pid --exclude '*.tmp')
+  [ "${1:-}" = full ] || skip+=(--exclude '*.pt')
+  mkdir -p "$into"
+  rsync -az --inplace "${skip[@]}" ${2:+"$2"} -e "ssh ${ssh_opts[*]}" "$target:$repo/runs/" "$into/"
+}
+
 case $cmd in
 push)
   cd "$here"
@@ -60,8 +86,8 @@ push)
   echo "== shipping commit ${sha:0:7} and the data"
   sync_up "$tmp/time-loops.bundle" "$tmp/data.sha256" "$target:$base/"
   remote "if [ -d $repo/.git ]; then git -C $repo fetch -q $base/time-loops.bundle HEAD
-          else git clone -q $base/time-loops.bundle $repo; fi
-          git -C $repo checkout -q --detach $sha
+          else git -c advice.detachedHead=false clone -q $base/time-loops.bundle $repo; fi
+          git -C $repo -c advice.detachedHead=false checkout -q --detach $sha
           mkdir -p $repo/data/synthetic $repo/runs"
   sync_up data/synthetic/ "$target:$repo/data/synthetic/"
   remote "cd $repo/data/synthetic && sha256sum --quiet -c $base/data.sha256 && echo 'data checksums match'"
@@ -87,6 +113,51 @@ launch)
           setsid nohup .venv/bin/python src/suite.py $(quote "$@") >> runs/suite.log 2>&1 < /dev/null &
           echo \"runner started (process \$!); output in $repo/runs/suite.log\""
   ;;
+watch)
+  echo "== streaming $target:$repo/runs into $into every ${every}s"
+  echo "   view live with: uv run tensorboard --logdir $into"
+  echo "   ctrl-c stops the streaming only; training keeps going (watch again to pick it back up)"
+  idle=0
+  while :; do
+    fetch || echo "   (copy failed; retrying next round)"
+    state=$(remote "cd $repo && { .venv/bin/python src/suite.py --running || true; }
+                    echo '~'; tail -n 1 runs/suite.log 2>/dev/null || true" 2>/dev/null) || state="unreachable"
+    live=$(sed '/^~$/,$d' <<<"$state" | grep '^training:' || true)
+    last=$(sed '1,/^~$/d' <<<"$state")
+    echo "$(date '+%H:%M:%S')  $(grep -c . <<<"$live" || true) training  |  runner: ${last:-$state}"
+    [ -z "$live" ] || sed 's/^training: /    /' <<<"$live"
+    # two idle rounds in a row, so a runner that is still starting up isn't mistaken for a finished one
+    if grep -q '^nothing running' <<<"$state"; then idle=$((idle + 1)); else idle=0; fi
+    [ "$idle" -ge 2 ] && break
+    sleep "$every"
+  done
+  echo "== nothing is running; final copy, checkpoints included"
+  fetch full
+  echo "== results in $into"
+  echo "   uv run python src/verdicts.py --all --by-config --root $into"
+  ;;
+up)
+  [ $# -ge 1 ] || { echo "error: give src/suite.py arguments, e.g. --suite tier1 --until 20000" >&2; exit 2; }
+  "$0" push "$host" "$port"
+  if [ "$smoke" = 1 ]; then
+    # the smoke test takes the run selection only, not the launch options
+    picks=()
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --until|--devices) shift 2 ;;
+        --dry-run) shift ;;
+        *) picks+=("$1"); shift ;;
+      esac
+    done
+    set -- ${rest[@]+"${rest[@]}"}
+    echo "== smoke test"
+    "$0" smoke "$host" "$port" ${picks[@]+"${picks[@]}"} ||
+      { echo "error: a config failed its smoke test; fix it, commit, and run up again" >&2; exit 1; }
+  fi
+  echo "== launching"
+  "$0" launch "$host" "$port" "$@"
+  "$0" watch "$host" "$port" --into "$into" --every "$every"
+  ;;
 status)
   remote "cd $repo
           .venv/bin/python src/suite.py --running || true
@@ -95,8 +166,8 @@ status)
           .venv/bin/python src/verdicts.py --all --by-config 2>/dev/null || echo 'no metrics yet'"
   ;;
 pull)
-  mkdir -p "$here/runs"
-  rsync -az --info=stats1 --exclude suite.pid --exclude train.pid --exclude '*.tmp' -e "ssh ${ssh_opts[*]}" "$target:$repo/runs/" "$here/runs/"
+  fetch full --info=stats1
+  echo "== results in $into"
   ;;
 stop)
   remote "cd $repo && { .venv/bin/python src/suite.py --stop || true; }"

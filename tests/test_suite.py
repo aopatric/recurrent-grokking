@@ -269,6 +269,14 @@ def test_one_runner_per_output_root_and_cli_controls(tmp_path, data_root, capsys
     claim_for_runner.unlink()
     assert suite.main(["--config", str(path), "--running"]) == 1
     assert suite.main(["--config", str(path), "--stop"]) == 1
+    # a live job is listed with its latest eval
+    (tmp_path / "runs" / "y").mkdir()
+    claim_for(tmp_path / "runs" / "y", os.getppid())
+    (tmp_path / "runs" / "y" / "metrics.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in evals([0.1, 0.25])) + '{"kind": "sw')
+    assert suite.main(["--config", str(path), "--running"]) == 0
+    assert f"training: y (process {os.getppid()}): step 1000, val 0.250" in capsys.readouterr().out
+    (tmp_path / "runs" / "y" / "train.pid").unlink()
     # a job whose runner is gone is stopped directly
     orphan = subprocess.Popen(["sleep", "30"])
     (tmp_path / "runs" / "x").mkdir()

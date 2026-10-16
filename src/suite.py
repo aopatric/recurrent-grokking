@@ -232,6 +232,33 @@ def runner_claim(cfg):
     return Path(cfg["output_root"]) / "suite.pid"
 
 
+def progress_note(run_dir):
+    """the step and mean val accuracy of a run's latest eval, read from the end of its metrics.
+
+    args:
+        run_dir: run directory.
+    returns:
+        text like "step 1200, val 0.034", or "" if there is no eval yet.
+    """
+    path = Path(run_dir) / "metrics.jsonl"
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 200_000))
+            lines = f.read().decode(errors="ignore").splitlines()
+    except OSError:
+        return ""
+    for ln in reversed(lines):
+        try:
+            row = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        if row.get("kind") == "eval":
+            val = sum(v["acc"] for v in row["val"].values()) / len(row["val"])
+            return f"step {row['step']}, val {val:.3f}"
+    return ""
+
+
 def running(cfg):
     """the live runner and training jobs under the config's output_root.
 
@@ -318,7 +345,8 @@ def main(argv=None):
         if runner:
             print(f"runner: process {runner}")
         for name, pid in jobs.items():
-            print(f"training: {name} (process {pid})")
+            note = progress_note(Path(cfg["output_root"]) / name)
+            print(f"training: {name} (process {pid})" + (f": {note}" if note else ""))
         if not runner and not jobs:
             print("nothing running")
         return 0 if runner or jobs else 1
