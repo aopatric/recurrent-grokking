@@ -3,6 +3,8 @@
 import json
 import os
 import signal
+import socket
+import subprocess
 import threading
 import time
 
@@ -33,29 +35,61 @@ def write_config(tmp_path, data_root, *entries):
     return path, cfg
 
 
+def claim_for(run_dir, pid):
+    """write a training claim on a run for some process, as train.py does.
+
+    args:
+        run_dir: run directory.
+        pid: process id to record.
+    """
+    (run_dir / "train.pid").write_text(json.dumps({"pid": pid, "host": socket.gethostname()}))
+
+
+def dead_pid():
+    """a process id that no longer exists.
+
+    returns:
+        pid of a finished, reaped child.
+    """
+    proc = subprocess.Popen(["true"])
+    proc.wait()
+    return proc.pid
+
+
 def test_plan_starts_resumes_and_skips(tmp_path, data_root):
-    """new runs start, stopped ones resume, finished or far-enough ones are skipped, unknown names fail."""
+    """new runs start, stopped ones resume, finished, claimed, diverged or far-enough ones are skipped."""
     entries = [run_entry(n) for n in ("new", "stopped", "done")]
     _, cfg = write_config(tmp_path, data_root, *entries)
     train.train(entries[1], cfg, "cpu", until=2, log=lambda _: None)
     train.train(entries[2], cfg, "cpu", log=lambda _: None)
-    assert dict(suite.plan(["stopped"], cfg))["stopped"].endswith("probably still training")
-    got = dict(suite.plan(["new", "stopped", "done"], cfg, active_seconds=0))
+    # a run stopped a moment ago is resumable straight away
+    got = dict(suite.plan(["new", "stopped", "done"], cfg))
     assert got["new"] == "start" and got["stopped"] == "resume" and got["done"].startswith("skip: complete")
-    assert dict(suite.plan(["stopped"], cfg, until=2, active_seconds=0))["stopped"].startswith("skip: already at step 2")
+    assert dict(suite.plan(["stopped"], cfg, until=2))["stopped"].startswith("skip: already at step 2")
+    stopped = tmp_path / "runs" / "stopped"
+    claim_for(stopped, os.getppid())
+    assert dict(suite.plan(["stopped"], cfg))["stopped"] == f"skip: being trained by process {os.getppid()}"
+    claim_for(stopped, dead_pid())
+    assert dict(suite.plan(["stopped"], cfg))["stopped"] == "resume"
+    meta = json.loads((stopped / "meta.json").read_text())
+    (stopped / "meta.json").write_text(json.dumps({**meta, "diverged_at": 2}))
+    assert dict(suite.plan(["stopped"], cfg))["stopped"] == "skip: diverged at step 2"
     with pytest.raises(train.RunConfigError, match="no runs named"):
         suite.plan(["missing"], cfg)
     with pytest.raises(train.RunConfigError, match="twice"):
         suite.plan(["new", "new"], cfg)
 
 
-def test_command_pins_one_gpu_per_job():
-    """a gpu job sees only its own gpu; a cpu job sees none."""
+def test_command_pins_one_gpu_per_job(monkeypatch):
+    """a gpu job sees only its own gpu, counted among the already-visible ones; a cpu job sees none."""
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
     cmd, env = suite.command("c.yaml", "r", "resume", "3", until=100)
     assert env["CUDA_VISIBLE_DEVICES"] == "3"
     assert "--resume" in cmd and cmd[cmd.index("--until") + 1] == "100" and cmd[cmd.index("--device") + 1] == "cuda"
     cmd, env = suite.command("c.yaml", "r", "start", "cpu")
     assert env["CUDA_VISIBLE_DEVICES"] == "" and "--resume" not in cmd and "--until" not in cmd
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "4,6")
+    assert suite.command("c.yaml", "r", "start", "1")[1]["CUDA_VISIBLE_DEVICES"] == "6"
 
 
 def test_run_all_until_then_finish(tmp_path, data_root):
@@ -63,7 +97,7 @@ def test_run_all_until_then_finish(tmp_path, data_root):
     path, cfg = write_config(tmp_path, data_root, run_entry("a"), run_entry("b"))
     first = suite.run_all(path, ["a", "b"], ["cpu"], until=4, poll=0.1, log=lambda _: None)
     assert first == {"a": "stopped at step 4", "b": "stopped at step 4"}
-    second = suite.run_all(path, ["a", "b"], ["cpu", "cpu"], poll=0.1, active_seconds=0, log=lambda _: None)
+    second = suite.run_all(path, ["a", "b"], ["cpu", "cpu"], poll=0.1, log=lambda _: None)
     assert second == {"a": "complete", "b": "complete"}
     assert "resumed a at step 4" in (tmp_path / "runs" / "a.log").read_text()
     assert t.load(tmp_path / "runs" / "a" / "latest.pt", weights_only=False)["step"] == 6
@@ -129,6 +163,30 @@ def test_fixed_point():
     assert verdicts.fixed_point({"kind": "sweep", "depth": 1, "by_T": {}}) is None
 
 
+def test_verdict_diverged_and_seed_summary():
+    """a run that diverged before grokking says so, and seeds of one config combine into one row."""
+    assert verdicts.verdict(evals([0.05] * 5), diverged_at=4500)["verdict"] == "diverged"
+    results = {"x_s41": verdicts.verdict(evals([0.0] * 5 + [0.95] * 15)),
+               "x_s42": verdicts.verdict(evals([0.0] * 9 + [0.95] * 11)),
+               "x_s43": verdicts.verdict(evals([0.05] * 21, trains=[0.6] * 21)),
+               "y_s41": verdicts.verdict(evals([0.05] * 5), diverged_at=4500)}
+    summary = verdicts.summarize(results)
+    assert summary["x"]["groks"] == "2/3" and summary["x"]["t_grok_median"] == 7000 and summary["x"]["fails"] == 1
+    assert summary["y"]["diverged"] == 1 and summary["y"]["groks"] == "0/1"
+    assert "| `x` |" in verdicts.table(summary, "config")
+
+
+def test_load_rows_drops_a_cut_off_last_line(tmp_path):
+    """a metrics file copied mid-write loses only its unfinished last line; earlier damage is an error."""
+    rows = evals([0.1, 0.2])
+    text = "".join(json.dumps(r) + "\n" for r in rows)
+    (tmp_path / "metrics.jsonl").write_text(text + '{"kind": "ev')
+    assert verdicts.load_rows(tmp_path) == rows
+    (tmp_path / "metrics.jsonl").write_text('{"kind": "ev\n' + text)
+    with pytest.raises(ValueError):
+        verdicts.load_rows(tmp_path)
+
+
 def test_verdicts_cli_on_a_real_run(tmp_path, data_root, capsys):
     """the cli prints a table row for a trained run."""
     entry = run_entry()
@@ -152,10 +210,25 @@ def test_stop_pauses_running_jobs(tmp_path, data_root):
         os.kill(os.getpid(), signal.SIGTERM)
 
     threading.Thread(target=stop_once_training, daemon=True).start()
-    out = suite.run_all(path, ["a", "b"], ["cpu"], poll=0.1, log=lambda _: None)
+    out = suite.run_all(path, ["a", "b"], ["cpu"], poll=0.1, grace=0.5, log=lambda _: None)
     assert out["a"].startswith("paused at step") and "b" not in out
     assert not (tmp_path / "runs" / "b").exists()
     assert signal.getsignal(signal.SIGTERM) == signal.SIG_DFL
+
+
+def test_stop_right_after_launch_still_pauses(tmp_path, data_root):
+    """a stop that arrives as a job starts waits out the grace period, so the job pauses instead of dying."""
+    slow = {**run_entry()["train"], "steps": 100_000, "eval_every": 50, "sweep_every": 100_000}
+    path, _ = write_config(tmp_path, data_root, run_entry("a", train=slow))
+
+    def stop_on_launch(line):
+        """signal the runner as soon as it reports the launch."""
+        if "start on cpu" in line:
+            os.kill(os.getpid(), signal.SIGTERM)
+
+    out = suite.run_all(path, ["a"], ["cpu"], poll=0.1, grace=8, log=stop_on_launch)
+    assert out["a"].startswith("paused at step")
+    assert dict(suite.plan(["a"], yaml.safe_load(path.read_text())))["a"] == "resume"
 
 
 def test_smoke_tries_each_config_once(tmp_path, data_root):
@@ -167,3 +240,41 @@ def test_smoke_tries_each_config_once(tmp_path, data_root):
     assert r["peak_gb"] is None and r["step_s"] >= 0 and r["hours_20k"] > 0
     assert not (tmp_path / "runs").exists() or not any((tmp_path / "runs").iterdir())
     assert smoke.main(["--config", str(path), "--runs", "a", "b", "--steps", "2", "--device", "cpu"]) == 0
+
+
+def test_claims_ignore_a_reused_pid(tmp_path):
+    """a claim whose pid now belongs to a process started at another time is stale."""
+    path = tmp_path / "train.pid"
+    parent = os.getppid()
+    path.write_text(json.dumps({"pid": parent, "host": socket.gethostname(), "start": train._start_time(parent)}))
+    assert train.live_claim(path) == parent
+    path.write_text(json.dumps({"pid": parent, "host": socket.gethostname(), "start": "1"}))
+    assert train.live_claim(path) is None
+    train.write_claim(path)
+    assert train.live_claim(path) is None
+    train.release_claim(path)
+    assert not path.exists()
+
+
+def test_one_runner_per_output_root_and_cli_controls(tmp_path, data_root, capsys):
+    """a second runner on the same output root is refused, and --running / --stop report and signal it."""
+    path, cfg = write_config(tmp_path, data_root, run_entry("a"))
+    (tmp_path / "runs").mkdir()
+    claim_for_runner = tmp_path / "runs" / "suite.pid"
+    claim_for_runner.write_text(json.dumps({"pid": os.getppid(), "host": socket.gethostname()}))
+    with pytest.raises(train.RunConfigError, match="already going"):
+        suite.run_all(path, ["a"], ["cpu"], poll=0.1, log=lambda _: None)
+    assert suite.main(["--config", str(path), "--running"]) == 0
+    assert f"runner: process {os.getppid()}" in capsys.readouterr().out
+    claim_for_runner.unlink()
+    assert suite.main(["--config", str(path), "--running"]) == 1
+    assert suite.main(["--config", str(path), "--stop"]) == 1
+    # a job whose runner is gone is stopped directly
+    orphan = subprocess.Popen(["sleep", "30"])
+    (tmp_path / "runs" / "x").mkdir()
+    claim_for(tmp_path / "runs" / "x", orphan.pid)
+    assert suite.main(["--config", str(path), "--stop"]) == 0
+    assert orphan.wait(timeout=10) == -signal.SIGTERM
+    (tmp_path / "runs" / "x" / "train.pid").unlink()
+    assert suite.run_all(path, ["a"], ["cpu"], poll=0.1, log=lambda _: None) == {"a": "complete"}
+    assert not claim_for_runner.exists()

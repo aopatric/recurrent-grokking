@@ -98,7 +98,7 @@ def main(argv=None):
         cfg = yaml.safe_load(Path(args.config).read_text())
         tr.validate_config(cfg)
         names = args.runs or [n for s in args.suite for n in suite.load_suite(args.suites, s)]
-        suite.plan(names, cfg, active_seconds=0)
+        suite.plan(names, cfg)
     except (OSError, yaml.YAMLError, tr.RunConfigError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

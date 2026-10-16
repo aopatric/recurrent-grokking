@@ -89,7 +89,9 @@ runs:
     train: {steps: 40000, eval_every: 100, sweep_every: 1000, eval_T_max: 32}
 
   # ablation suite: every run at seeds 41, 42 and 43, judged at 20k steps with suite.py --until
-  # and resumed toward 40k when it is still improving; names are <tier>_<model>_<change>_<data>_s<seed>
+  # and resumed toward 40k when it is still improving; names are <tier>_<model>_<change>_<data>_s<seed>.
+  # the seed sets the initial weights, the depth draws and the random starts; every run shares the
+  # dataset's one train/val split, which comes from the data config's own seed
 
   # one layer, no positions, one pass: the non-looped model that groks
   - name: t1_anchor_nope_ref_p113_h3_x6_s41

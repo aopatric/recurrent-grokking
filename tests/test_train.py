@@ -3,6 +3,7 @@
 import json
 import os
 import signal
+import socket
 
 import pytest
 import torch as t
@@ -335,3 +336,111 @@ def test_until_then_resume_matches_uninterrupted(tmp_path, data_root):
     assert all(t.equal(a[k], b[k]) for k in a)
     assert (full / "metrics.jsonl").read_text() == (cut / "metrics.jsonl").read_text()
     assert (full / "steps.jsonl").read_text() == (cut / "steps.jsonl").read_text()
+
+
+def test_resume_refuses_a_live_claim_or_a_changed_config(tmp_path, data_root):
+    """resuming is refused while another live process trains the run, or once its config entry has changed."""
+    entry = run_entry()
+    cfg = config(tmp_path, data_root, entry)
+    run = train.train(entry, cfg, "cpu", until=2, log=quiet)
+    assert not (run / "train.pid").exists()
+    (run / "train.pid").write_text(json.dumps({"pid": os.getppid(), "host": socket.gethostname()}))
+    with pytest.raises(train.RunConfigError, match="being trained"):
+        train.train(entry, cfg, "cpu", resume=True, log=quiet)
+    (run / "train.pid").write_text(json.dumps({"pid": os.getppid(), "host": "another-machine"}))
+    changed = {**entry, "optim": {"weight_decay": 0.5}}
+    with pytest.raises(train.RunConfigError, match="changed"):
+        train.train(changed, cfg, "cpu", resume=True, log=quiet)
+    assert train.train(entry, cfg, "cpu", resume=True, log=quiet) == run
+    assert (run / "checkpoints" / "final.pt").exists()
+
+
+def test_until_keeps_its_weights_as_a_checkpoint(tmp_path, data_root):
+    """stopping early saves a checkpoint at that step, which a later resume doesn't overwrite."""
+    entry = run_entry(train={**run_entry()["train"], "n_checkpoints": 1})
+    cfg = config(tmp_path, data_root, entry)
+    run = train.train(entry, cfg, "cpu", until=3, log=quiet)
+    kept = t.load(run / "checkpoints" / "step_0000003.pt")
+    train.train(entry, cfg, "cpu", resume=True, log=quiet)
+    assert all(t.equal(kept[k], v) for k, v in t.load(run / "checkpoints" / "step_0000003.pt").items())
+    assert t.load(run / "latest.pt", weights_only=False)["step"] == 6
+
+
+def test_interrupted_before_the_first_save_resumes_from_step_0(tmp_path, data_root):
+    """a fresh run is resumable from step 0, and resuming there matches the uninterrupted run."""
+    entry = run_entry(train={**run_entry()["train"], "resume_every": 100})
+    full = train.train(entry, config(tmp_path / "full", data_root, entry), "cpu", log=quiet)
+
+    def stop_at_2(line):
+        """interrupt once step 2 is logged, before any periodic save."""
+        if line.startswith("step      2"):
+            raise _Stop
+
+    cut_cfg = config(tmp_path / "cut", data_root, entry)
+    with pytest.raises(_Stop):
+        train.train(entry, cut_cfg, "cpu", log=stop_at_2)
+    cut = tmp_path / "cut" / "runs" / "r"
+    assert t.load(cut / "latest.pt", weights_only=False)["step"] == 0
+    train.train(entry, cut_cfg, "cpu", resume=True, log=quiet)
+    a, b = t.load(full / "checkpoints" / "final.pt"), t.load(cut / "checkpoints" / "final.pt")
+    assert all(t.equal(a[k], b[k]) for k in a)
+    assert (full / "metrics.jsonl").read_text() == (cut / "metrics.jsonl").read_text()
+
+
+def test_resumed_tensorboard_events_match_metrics(tmp_path, data_root):
+    """after a resume, the event files hold each eval step exactly once, including the resume step."""
+    from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
+    entry = run_entry()
+    cfg = config(tmp_path, data_root, entry)
+    run = train.train(entry, cfg, "cpu", until=4, log=quiet)
+    train.train(entry, cfg, "cpu", resume=True, log=quiet)
+    logged = [json.loads(ln)["step"] for ln in (run / "metrics.jsonl").read_text().splitlines()
+              if json.loads(ln)["kind"] == "eval"]
+    events = [e.step for e in EventAccumulator(str(run / "tb")).Reload().Scalars("val_acc/h1")]
+    assert sorted(events) == logged == [0, 2, 4, 6]
+
+
+def test_divergence_stops_and_is_recorded(tmp_path, data_root, monkeypatch):
+    """a non-finite loss stops the run without updating, records the step, and blocks resuming."""
+    real, calls = train.accumulate_grads, []
+
+    def nan_on_third(*args, **kwargs):
+        """the real gradient, but a nan loss on the third step."""
+        calls.append(1)
+        total = real(*args, **kwargs)
+        return float("nan") if len(calls) == 3 else total
+
+    monkeypatch.setattr(train, "accumulate_grads", nan_on_third)
+    entry = run_entry()
+    cfg = config(tmp_path, data_root, entry)
+    run = train.train(entry, cfg, "cpu", log=quiet)
+    assert json.loads((run / "meta.json").read_text())["diverged_at"] == 3
+    assert not (run / "checkpoints" / "final.pt").exists()
+    assert [json.loads(ln)["step"] for ln in (run / "steps.jsonl").read_text().splitlines()] == [1, 2]
+    with pytest.raises(train.RunConfigError, match="diverged"):
+        train.train(entry, cfg, "cpu", resume=True, log=quiet)
+
+
+def test_pause_during_setup_still_saves(tmp_path, data_root, monkeypatch):
+    """a sigterm while the data is loading pauses the run after its first step, resumable."""
+    real = train.load_data
+
+    def load_then_signal(*args, **kwargs):
+        """load the data, then deliver a sigterm as if sent during setup."""
+        os.kill(os.getpid(), signal.SIGTERM)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(train, "load_data", load_then_signal)
+    entry = run_entry(train={**run_entry()["train"], "resume_every": 100})
+    run = train.train(entry, config(tmp_path, data_root, entry), "cpu", log=quiet)
+    assert t.load(run / "latest.pt", weights_only=False)["step"] == 1
+    assert signal.getsignal(signal.SIGTERM) == signal.SIG_DFL
+
+
+def test_metrics_truncation_drops_a_cut_off_last_line(tmp_path):
+    """resuming after a write was cut off drops the partial line instead of failing."""
+    path = tmp_path / "metrics.jsonl"
+    path.write_text('{"step": 1}\n{"step": 2}\n{"step": 3, "kind"')
+    train._truncate_metrics(path, 5)
+    assert path.read_text() == '{"step": 1}\n{"step": 2}\n'

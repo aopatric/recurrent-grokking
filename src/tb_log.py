@@ -34,17 +34,19 @@ LAYOUT = {
 }
 
 
-def open_writer(run_dir, start=0):
+def open_writer(run_dir, start=0, resume=False):
     """open the event writer for a run.
 
     args:
         run_dir: run directory.
-        start: step training resumes from; events logged after it are dropped.
+        start: step training resumes from.
+        resume: whether this continues an earlier run; its events logged after start are dropped.
     returns:
         SummaryWriter writing to run_dir/tb.
     """
-    writer = SummaryWriter(Path(run_dir) / "tb", purge_step=start or None, flush_secs=30)
-    if not start:
+    # events at start itself were logged before the resume point was saved, so they stay
+    writer = SummaryWriter(Path(run_dir) / "tb", purge_step=start + 1 if resume else None, flush_secs=30)
+    if not resume:
         writer.add_custom_scalars(LAYOUT)
     return writer
 

@@ -13,9 +13,11 @@ import argparse
 import dataclasses
 import hashlib
 import json
+import math
 import os
 import platform
 import signal
+import socket
 import sys
 from pathlib import Path
 
@@ -353,8 +355,117 @@ def _truncate_metrics(path, step):
     """
     if not path.exists():
         return
-    keep = [ln for ln in path.read_text().splitlines() if json.loads(ln)["step"] <= step]
+    keep = [ln for ln in read_lines(path) if json.loads(ln)["step"] <= step]
     path.write_text("".join(ln + "\n" for ln in keep))
+
+
+def read_lines(path):
+    """the complete json lines of a log file, dropping a last line cut off by an interrupted write.
+
+    args:
+        path: a .jsonl file.
+    returns:
+        list of line strings.
+    raises:
+        ValueError: if a line other than the last is not valid json.
+    """
+    lines = [ln for ln in Path(path).read_text().splitlines() if ln.strip()]
+    for i, ln in enumerate(lines):
+        try:
+            json.loads(ln)
+        except json.JSONDecodeError:
+            if i == len(lines) - 1:
+                return lines[:-1]
+            raise ValueError(f"{path}: line {i + 1} is not valid json")
+    return lines
+
+
+def _start_time(pid):
+    """when a process started, in clock ticks since boot, to tell it apart from a later process reusing its pid.
+
+    args:
+        pid: process id.
+    returns:
+        the start time as a string, or None where /proc isn't available.
+    """
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return None
+    # fields after the parenthesized command name start at field 3; the start time is field 22
+    return stat.rsplit(")", 1)[1].split()[19]
+
+
+def write_claim(path):
+    """record this process as the owner of something, e.g. a run being trained.
+
+    args:
+        path: claim file to write.
+    """
+    pid = os.getpid()
+    Path(path).write_text(json.dumps({"pid": pid, "host": socket.gethostname(), "start": _start_time(pid)}))
+
+
+def live_claim(path):
+    """the live process on this machine that holds a claim, if any.
+
+    args:
+        path: claim file written by write_claim.
+    returns:
+        its pid, or None if the claim is missing, from another machine, from this process, or stale.
+    """
+    try:
+        owner = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+    pid = owner.get("pid")
+    if owner.get("host") != socket.gethostname() or pid == os.getpid():
+        return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return None
+    except PermissionError:
+        pass
+    # after a restart the pid may belong to an unrelated process
+    if owner.get("start") is not None and _start_time(pid) not in (None, owner["start"]):
+        return None
+    return pid
+
+
+def release_claim(path):
+    """remove a claim if this process holds it.
+
+    args:
+        path: claim file.
+    """
+    try:
+        if json.loads(Path(path).read_text()).get("pid") == os.getpid():
+            Path(path).unlink()
+    except (OSError, ValueError):
+        pass
+
+
+def training_pid(run_dir):
+    """the process on this machine that is training a run right now, if any.
+
+    args:
+        run_dir: run directory.
+    returns:
+        its pid, or None.
+    """
+    return live_claim(Path(run_dir) / "train.pid")
+
+
+def _finite_grads(model):
+    """whether every gradient is finite.
+
+    args:
+        model: the model, after backward.
+    returns:
+        bool.
+    """
+    return all(bool(t.isfinite(prm.grad).all()) for prm in model.parameters() if prm.grad is not None)
 
 
 def param_groups(model, weight_decay, no_decay):
@@ -443,7 +554,8 @@ def train(entry, cfg, device, max_steps=None, resume=False, until=None, log=prin
         until: stop after this step, saving latest.pt for a later resume; None trains to the end.
         log: function for progress lines.
     returns:
-        path to the run directory; the run is complete only if checkpoints/final.pt exists.
+        path to the run directory; the run is complete only if checkpoints/final.pt exists, and
+        meta.json records diverged_at if the loss stopped being finite.
     raises:
         RunConfigError: if the run directory is in the wrong state or the settings are invalid.
     """
@@ -457,122 +569,145 @@ def train(entry, cfg, device, max_steps=None, resume=False, until=None, log=prin
         raise RunConfigError(f"{run_dir} exists; use --resume or add a new run entry")
     if (run_dir / "checkpoints" / "final.pt").exists():
         raise RunConfigError(f"{run_dir} is already complete")
-
-    setup_precision()
-    data = load_data(Path(cfg["data_root"]) / entry["data"], device)
-    mcfg, rule, grad_iters, tr, op = resolve(entry, data["meta"])
-    steps = max_steps or tr["steps"]
-    seed = entry["seed"]
-
-    # init on cpu so the starting weights don't depend on the device
-    t.manual_seed(seed)
-    model = models.LoopedTransformer(mcfg).to(device)
-    opt = t.optim.AdamW(param_groups(model, op["weight_decay"], op["no_decay"]), lr=op["lr"],
-                        betas=tuple(op["betas"]))
-    warm = op["warmup_steps"]
-    sched = t.optim.lr_scheduler.LambdaLR(opt, lambda s: min(s / warm, 1) if warm else 1.0)
-    rng = dp.depth_rng(seed)
-    state_gen = t.Generator(device=device).manual_seed(seed)
-    start = 0
-
-    metrics_path = run_dir / "metrics.jsonl"
     if resume:
-        ck = t.load(latest, map_location=device, weights_only=False)
-        model.load_state_dict(ck["model"])
-        opt.load_state_dict(ck["optim"])
-        sched.load_state_dict(ck["sched"])
-        rule.load_state_dict(ck["depth"])
-        rng.setstate(ck["depth_rng"])
-        state_gen.set_state(ck["state_gen"].cpu())
-        start = ck["step"]
-        if until is not None and until <= start:
-            raise RunConfigError(f"{run_dir} is already at step {start}; --until must be later")
-        _truncate_metrics(metrics_path, start)
-        _truncate_metrics(run_dir / "steps.jsonl", start)
-        meta = json.loads((run_dir / "meta.json").read_text())
-        meta.setdefault("resumes", []).append({"from_step": start, "max_steps": max_steps, "until": until,
-                                               "device": _device_name(device), "git": git_info()})
-        (run_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
-        log(f"resumed {entry['name']} at step {start}")
-    else:
-        (run_dir / "checkpoints").mkdir(parents=True)
-        (run_dir / "config.yaml").write_text(yaml.safe_dump(entry, sort_keys=False))
-        meta = {
-            "git": git_info(),
-            "python": platform.python_version(),
-            "torch": t.__version__,
-            "device": _device_name(device),
-            "data": {"name": entry["data"], "generator_version": data["meta"]["generator_version"],
-                     "sha256": data["sha256"]},
-            "model": dataclasses.asdict(mcfg),
-            "steps": steps,
-            "max_steps": max_steps,
-        }
-        (run_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+        if pid := training_pid(run_dir):
+            raise RunConfigError(f"{run_dir} is being trained by process {pid}")
+        saved = yaml.safe_load((run_dir / "config.yaml").read_text())
+        if changed := sorted(k for k in set(saved) | set(entry) if saved.get(k) != entry.get(k)):
+            raise RunConfigError(f"{run_dir}: the config entry changed since the run started ({changed}); "
+                                 "add a new run entry instead")
+        if (div := json.loads((run_dir / "meta.json").read_text()).get("diverged_at")) is not None:
+            raise RunConfigError(f"{run_dir} diverged at step {div}; resuming would repeat it")
 
-    train_sets = data["sets"]["train"]
-    grid_tokens, grid_labels, grid_train = data["grid"]
-    ckpts = set(checkpoint_steps(steps, tr["n_checkpoints"]))
-    eval_T = rule.eval_depth()
-    can_sweep = mcfg.core_shared and tr["eval_T_max"] > 1
-
-    stop = steps if until is None else min(until, steps)
-
-    def eval_gen():
-        """fresh generator so every evaluation sees the same random starts."""
-        return t.Generator(device=device).manual_seed(seed + 1)
-
-    def log_eval(step, train_loss):
-        """write the routine evaluation line."""
-        model.eval()
-        row = {"kind": "eval", "step": step, "lr": sched.get_last_lr()[0], "depth": eval_T,
-               "train_step_loss": train_loss,
-               "train": evaluate(model, train_sets, eval_T, tr["chunk_size"], eval_gen()),
-               "val": evaluate(model, data["sets"]["val"], eval_T, tr["chunk_size"], eval_gen()),
-               "progress": progress.progress_measures(model, grid_tokens, grid_labels, grid_train, eval_T,
-                                                       generator=eval_gen())}
-        model.train()
-        with open(metrics_path, "a") as f:
-            f.write(json.dumps(row) + "\n")
-        tb_log.write_row(writer, row)
-        accs = " ".join(f"h{h}={v['acc']:.3f}" for h, v in row["val"].items())
-        shown = "-" if train_loss is None else f"{train_loss:.3e}"
-        log(f"step {step:>6}  train loss {shown}"
-            f"  val acc {accs}  restricted {row['progress']['restricted_loss']:.3f}")
-
-    def log_sweep(step):
-        """write the held-out and depth-sweep line."""
-        model.eval()
-        row = {"kind": "sweep", "step": step, "depth": eval_T, "at_eval_depth": {}, "by_T": {}}
-        for name in ("val",) + _EVAL_FILES:
-            if name not in data["sets"]:
-                continue
-            if name != "val":
-                row["at_eval_depth"][name] = evaluate(model, data["sets"][name], eval_T, tr["chunk_size"], eval_gen())
-            if can_sweep:
-                row["by_T"][name] = accuracy_by_depth(model, data["sets"][name], tr["eval_T_max"],
-                                                      tr["chunk_size"], eval_gen())
-        model.train()
-        with open(metrics_path, "a") as f:
-            f.write(json.dumps(row) + "\n")
-        tb_log.write_row(writer, row)
-
-    def save_latest(step):
-        """write the resume checkpoint."""
-        _atomic_save({"model": model.state_dict(), "optim": opt.state_dict(), "sched": sched.state_dict(),
-                      "depth": rule.state_dict(), "depth_rng": rng.getstate(),
-                      "state_gen": state_gen.get_state(), "step": step}, latest)
-
-    writer = tb_log.open_writer(run_dir, start)
+    # catch a pause from the start, so a stop during setup still ends at a resumable step
     pause = _PauseRequest()
+    writer = None
     try:
-        if start == 0:
+        setup_precision()
+        data = load_data(Path(cfg["data_root"]) / entry["data"], device)
+        mcfg, rule, grad_iters, tr, op = resolve(entry, data["meta"])
+        steps = max_steps or tr["steps"]
+        seed = entry["seed"]
+
+        # init on cpu so the starting weights don't depend on the device
+        t.manual_seed(seed)
+        model = models.LoopedTransformer(mcfg).to(device)
+        opt = t.optim.AdamW(param_groups(model, op["weight_decay"], op["no_decay"]), lr=op["lr"],
+                            betas=tuple(op["betas"]))
+        warm = op["warmup_steps"]
+        sched = t.optim.lr_scheduler.LambdaLR(opt, lambda s: min(s / warm, 1) if warm else 1.0)
+        rng = dp.depth_rng(seed)
+        state_gen = t.Generator(device=device).manual_seed(seed)
+        start = 0
+
+        metrics_path = run_dir / "metrics.jsonl"
+        meta_path = run_dir / "meta.json"
+        if resume:
+            write_claim(run_dir / "train.pid")
+            ck = t.load(latest, map_location=device, weights_only=False)
+            model.load_state_dict(ck["model"])
+            opt.load_state_dict(ck["optim"])
+            sched.load_state_dict(ck["sched"])
+            rule.load_state_dict(ck["depth"])
+            rng.setstate(ck["depth_rng"])
+            state_gen.set_state(ck["state_gen"].cpu())
+            start = ck["step"]
+            if until is not None and until <= start:
+                raise RunConfigError(f"{run_dir} is already at step {start}; --until must be later")
+            _truncate_metrics(metrics_path, start)
+            _truncate_metrics(run_dir / "steps.jsonl", start)
+            meta = json.loads(meta_path.read_text())
+            meta.setdefault("resumes", []).append({"from_step": start, "max_steps": max_steps, "until": until,
+                                                   "device": _device_name(device), "git": git_info()})
+            meta_path.write_text(json.dumps(meta, indent=2) + "\n")
+            log(f"resumed {entry['name']} at step {start}")
+        else:
+            (run_dir / "checkpoints").mkdir(parents=True)
+            write_claim(run_dir / "train.pid")
+            (run_dir / "config.yaml").write_text(yaml.safe_dump(entry, sort_keys=False))
+            meta = {
+                "git": git_info(),
+                "python": platform.python_version(),
+                "torch": t.__version__,
+                "device": _device_name(device),
+                "data": {"name": entry["data"], "generator_version": data["meta"]["generator_version"],
+                         "sha256": data["sha256"]},
+                "model": dataclasses.asdict(mcfg),
+                "steps": steps,
+                "max_steps": max_steps,
+            }
+            meta_path.write_text(json.dumps(meta, indent=2) + "\n")
+
+        train_sets = data["sets"]["train"]
+        grid_tokens, grid_labels, grid_train = data["grid"]
+        ckpts = set(checkpoint_steps(steps, tr["n_checkpoints"]))
+        eval_T = rule.eval_depth()
+        can_sweep = mcfg.core_shared and tr["eval_T_max"] > 1
+        stop = steps if until is None else min(until, steps)
+
+        def eval_gen():
+            """fresh generator so every evaluation sees the same random starts."""
+            return t.Generator(device=device).manual_seed(seed + 1)
+
+        def log_eval(step, train_loss):
+            """write the routine evaluation line."""
+            model.eval()
+            row = {"kind": "eval", "step": step, "lr": sched.get_last_lr()[0], "depth": eval_T,
+                   "train_step_loss": train_loss,
+                   "train": evaluate(model, train_sets, eval_T, tr["chunk_size"], eval_gen()),
+                   "val": evaluate(model, data["sets"]["val"], eval_T, tr["chunk_size"], eval_gen()),
+                   "progress": progress.progress_measures(model, grid_tokens, grid_labels, grid_train, eval_T,
+                                                           generator=eval_gen())}
+            model.train()
+            with open(metrics_path, "a") as f:
+                f.write(json.dumps(row) + "\n")
+            tb_log.write_row(writer, row)
+            accs = " ".join(f"h{h}={v['acc']:.3f}" for h, v in row["val"].items())
+            shown = "-" if train_loss is None else f"{train_loss:.3e}"
+            log(f"step {step:>6}  train loss {shown}"
+                f"  val acc {accs}  restricted {row['progress']['restricted_loss']:.3f}")
+
+        def log_sweep(step):
+            """write the held-out and depth-sweep line."""
+            model.eval()
+            row = {"kind": "sweep", "step": step, "depth": eval_T, "at_eval_depth": {}, "by_T": {}}
+            for name in ("val",) + _EVAL_FILES:
+                if name not in data["sets"]:
+                    continue
+                if name != "val":
+                    row["at_eval_depth"][name] = evaluate(model, data["sets"][name], eval_T, tr["chunk_size"],
+                                                          eval_gen())
+                if can_sweep:
+                    row["by_T"][name] = accuracy_by_depth(model, data["sets"][name], tr["eval_T_max"],
+                                                          tr["chunk_size"], eval_gen())
+            model.train()
+            with open(metrics_path, "a") as f:
+                f.write(json.dumps(row) + "\n")
+            tb_log.write_row(writer, row)
+
+        def save_latest(step):
+            """write the resume checkpoint."""
+            _atomic_save({"model": model.state_dict(), "optim": opt.state_dict(), "sched": sched.state_dict(),
+                          "depth": rule.state_dict(), "depth_rng": rng.getstate(),
+                          "state_gen": state_gen.get_state(), "step": step}, latest)
+
+        writer = tb_log.open_writer(run_dir, start, resume)
+        if not resume:
             log_eval(0, None)
+            # resumable from the very start, so an early interruption never strands a run
+            save_latest(0)
         model.train()
         for step in range(start, steps):
             r = rule.sample(rng)
             opt.zero_grad(set_to_none=True)
             total = accumulate_grads(model, train_sets, r, grad_iters, tr["chunk_size"], state_gen)
+            if not math.isfinite(total) or not _finite_grads(model):
+                # skip the update: nan weights would only repeat the failure
+                meta = json.loads(meta_path.read_text())
+                meta["diverged_at"] = step + 1
+                meta_path.write_text(json.dumps(meta, indent=2) + "\n")
+                log(f"diverged {entry['name']} at step {step + 1} (loss {total}); stopping")
+                break
             if tr["log_steps"]:
                 before = {n: prm.detach().clone() for n, prm in model.named_parameters()}
             opt.step()
@@ -590,7 +725,8 @@ def train(entry, cfg, device, max_steps=None, resume=False, until=None, log=prin
                 log_eval(done, total)
             if done % tr["sweep_every"] == 0 or done in ckpts:
                 log_sweep(done)
-            if done in ckpts:
+            # keep the weights at an early stop, since a later resume overwrites latest.pt
+            if done in ckpts or done == stop < steps:
                 name = "final.pt" if done == steps else f"step_{done:07d}.pt"
                 _atomic_save(model.state_dict(), run_dir / "checkpoints" / name)
             if (done == steps or done == stop or done % tr["resume_every"] == 0
@@ -604,9 +740,10 @@ def train(entry, cfg, device, max_steps=None, resume=False, until=None, log=prin
                 break
     finally:
         pause.restore()
-        writer.close()
+        if writer is not None:
+            writer.close()
+        release_claim(run_dir / "train.pid")
     return run_dir
-
 
 def main(argv=None):
     """run the cli.
@@ -614,7 +751,7 @@ def main(argv=None):
     args:
         argv: argument list, or None for sys.argv.
     returns:
-        exit code: 0 ok, 2 bad config or run directory state.
+        exit code: 0 ok, 2 bad config or run directory state, 3 the loss diverged.
     """
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default="configs/train.yaml")
@@ -635,6 +772,8 @@ def main(argv=None):
     except (OSError, yaml.YAMLError, RunConfigError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+    if json.loads((run_dir / "meta.json").read_text()).get("diverged_at") is not None:
+        return 3
     if (run_dir / "checkpoints" / "final.pt").exists():
         print(f"wrote {run_dir}")
     return 0
