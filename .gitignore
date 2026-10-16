@@ -227,3 +227,6 @@ CLAUDE.md
 
 # Generated data
 data/
+
+# training runs
+runs/

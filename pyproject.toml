@@ -5,8 +5,10 @@ description = "The clock algorithm in looped transformers: how recurrent-depth m
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "einops>=0.8.2",
+    "matplotlib>=3.11.2",
     "numpy>=2.5.4",
     "pyyaml>=6.0",
+    "tensorboard>=2.21.0",
     "torch>=2.14.1",
 ]
 
@@ -14,6 +16,8 @@ dependencies = [
 dev = [
     "pytest>=8",
     "datasets>=3",
+    "ipykernel>=7.4.0",
+    "nbclient>=0.11.0",
 ]
 
 [tool.uv]
