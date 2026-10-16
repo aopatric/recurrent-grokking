@@ -1,7 +1,7 @@
 """run a list of training runs, one per device at a time, resuming any that were stopped.
 
     uv run python src/suite.py --runs NAME [NAME ...] [--devices 0,1] [--until N] [--dry-run]
-    uv run python src/suite.py --suite NAME [--suites configs/suites.yaml] ...
+    uv run python src/suite.py --suite NAME [NAME ...] [--suites configs/suites.yaml] ...
 
 each run is a src/train.py process with its output in <output_root>/<name>.log. finished runs are skipped,
 runs with a latest.pt are resumed, and new runs start fresh. ctrl-c (or sigterm) pauses every running job
@@ -227,14 +227,14 @@ def main(argv=None):
     ap.add_argument("--config", default="configs/train.yaml")
     which = ap.add_mutually_exclusive_group(required=True)
     which.add_argument("--runs", nargs="+")
-    which.add_argument("--suite")
+    which.add_argument("--suite", nargs="+", help="one or more suite names, run in the order given")
     ap.add_argument("--suites", default="configs/suites.yaml")
     ap.add_argument("--devices", help="comma-separated gpu indices, or cpu; default every visible gpu")
     ap.add_argument("--until", type=int, help="stop each run at this step, ready to resume")
     ap.add_argument("--dry-run", action="store_true", help="print what would run and exit")
     args = ap.parse_args(argv)
     try:
-        names = args.runs or load_suite(args.suites, args.suite)
+        names = args.runs or [n for s in args.suite for n in load_suite(args.suites, s)]
         devices = args.devices.split(",") if args.devices else default_devices()
         if args.dry_run:
             cfg = yaml.safe_load(Path(args.config).read_text())

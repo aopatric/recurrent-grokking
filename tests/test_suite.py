@@ -10,6 +10,7 @@ import pytest
 import torch as t
 import yaml
 
+import smoke
 import suite
 import train
 import verdicts
@@ -155,3 +156,14 @@ def test_stop_pauses_running_jobs(tmp_path, data_root):
     assert out["a"].startswith("paused at step") and "b" not in out
     assert not (tmp_path / "runs" / "b").exists()
     assert signal.getsignal(signal.SIGTERM) == signal.SIG_DFL
+
+
+def test_smoke_tries_each_config_once(tmp_path, data_root):
+    """runs that differ only in seed share one smoke test, which reports timings without leaving files."""
+    entries = [run_entry("a"), {**run_entry("b"), "seed": 1}, run_entry("c", depth={"rule": "fixed", "T": 3})]
+    path, cfg = write_config(tmp_path, data_root, *entries)
+    assert [e["name"] for e in smoke.distinct(["a", "b", "c"], cfg)] == ["a", "c"]
+    r = smoke.smoke(entries[0], cfg, "cpu", steps=3)
+    assert r["peak_gb"] is None and r["step_s"] >= 0 and r["hours_20k"] > 0
+    assert not (tmp_path / "runs").exists() or not any((tmp_path / "runs").iterdir())
+    assert smoke.main(["--config", str(path), "--runs", "a", "b", "--steps", "2", "--device", "cpu"]) == 0
