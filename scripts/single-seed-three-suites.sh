@@ -5,8 +5,8 @@
 #   scripts/single-seed-three-suites.sh HOST PORT [--into DIR] [--every SECONDS] [--table N] [--no-smoke]
 #
 # this is scripts/vast.sh up with the run list seed41_all_tiers from configs/suites.yaml. results stream into
-# runs/vast by default (view live with: uv run tensorboard --logdir runs/vast), the verdict table is printed
-# every 10 rounds, and once nothing is running a final copy brings the checkpoints.
+# vast-runs/ at the repo root by default (view live with: uv run tensorboard --logdir vast-runs), the verdict
+# table is printed every 10 rounds, and once nothing is running a final copy brings the checkpoints.
 set -euo pipefail
 
 if [ $# -lt 2 ]; then

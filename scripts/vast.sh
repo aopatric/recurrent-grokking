@@ -11,7 +11,7 @@
 #   scripts/vast.sh stop   HOST PORT                  pause every running job at its next step
 #   scripts/vast.sh shell  HOST PORT                  open a shell in the remote checkout
 #
-# OPTS: --into DIR (default runs/vast), --every SECONDS (default 60), --no-smoke (up only),
+# OPTS: --into DIR (default vast-runs/ at the repo root), --every SECONDS (default 60), --no-smoke (up only),
 #       --table N (up and watch: print the verdict table of the copied runs every N rounds and at the end).
 # ARGS for up and launch are src/suite.py arguments, e.g. --suite tier1 tier2 --until 20000.
 # env: VAST_USER (default root), VAST_DIR (default /workspace), ALLOW_DIRTY=1 to ship HEAD despite uncommitted
@@ -24,7 +24,7 @@ cmd=$1 host=$2 port=$3
 shift 3
 
 # options shared by up, watch and pull; everything else is passed on
-into=runs/vast every=60 smoke=1 table=0 rest=()
+into= every=60 smoke=1 table=0 rest=()
 while [ $# -gt 0 ]; do
   case $1 in
     --into) into=$2; shift 2 ;;
@@ -40,7 +40,8 @@ user=${VAST_USER:-root}
 base=${VAST_DIR:-/workspace}
 repo="$base/time-loops"
 here=$(cd "$(dirname "$0")/.." && pwd)
-ssh_opts=(-p "$port" -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30
+into=${into:-$here/vast-runs}
+ssh_opts=(-p "$port" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 -o ServerAliveInterval=30
           -o ControlMaster=auto -o "ControlPath=$HOME/.ssh/cm-vast-%C" -o ControlPersist=10m)
 target="$user@$host"
 # the shared-connection socket lives here

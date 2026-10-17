@@ -6,8 +6,8 @@ The short version, once an instance is rented:
 
 ```bash
 export H=ssh5.vast.ai P=41234                       # from the instance's "Connect" button
-scripts/vast.sh up $H $P --into runs/vast --suite tier1 tier2 tier3 --until 20000
-uv run tensorboard --logdir runs/vast               # in a second terminal: live charts
+scripts/vast.sh up $H $P --suite tier1 tier2 tier3 --until 20000
+uv run tensorboard --logdir vast-runs               # in a second terminal: live charts
 ```
 
 **Single-seed pass** (seed 41 of all 24 configs, about a third of the cost) with a live verdict table:
@@ -62,6 +62,7 @@ git status                                                               # commi
 ## 3. Rent an instance
 
 On the **Search** page:
+- **On-demand, not interruptible.** An interruptible instance is stopped whenever someone outbids it, and training stops with it.
 - **GPU:** RTX 5090, 4090 or 3090; 8 GPUs is a good size. Training runs in true fp32 (TF32 off), where consumer cards beat A100s and H100s, which cost more.
 - **CUDA:** filter for **max CUDA ≥ 13.0**. The lockfile pins a CUDA 13 build of torch.
 - **RAM:** at least 32 GB, since each job holds a few GB of host memory.
@@ -87,7 +88,7 @@ export H=ssh5.vast.ai P=41234
 ## 4. Run the whole suite and stream it back
 
 ```bash
-scripts/vast.sh up $H $P --into runs/vast --suite tier1 tier2 tier3 --until 20000
+scripts/vast.sh up $H $P --suite tier1 tier2 tier3 --until 20000
 ```
 
 `up` does four things in order. It stops at the first one that fails.
@@ -101,7 +102,7 @@ scripts/vast.sh up $H $P --into runs/vast --suite tier1 tier2 tier3 --until 2000
    - It spreads runs over every GPU, one per GPU.
    - Runs go seed by seed, so every config gets one seed before any gets three.
    - Each run stops at step 20,000 (`--until`) with a resumable checkpoint.
-4. **watch**: every 60 s (`--every`), it copies the instance's `runs/` into `runs/vast/` and prints what's training:
+4. **watch**: every 60 s (`--every`), it copies the instance's `runs/` into `vast-runs/` and prints what's training:
    ```
    21:04:10  8 training  |  runner: 2026-10-17 21:03:55  t1_huginn_ref_p113_h3_x6_s41: start on 3
        t1_anchor_nope_ref_p113_h3_x6_s41 (process 812): step 14200, val 0.998
@@ -112,14 +113,14 @@ scripts/vast.sh up $H $P --into runs/vast --suite tier1 tier2 tier3 --until 2000
    - With `--table N`, it also prints the verdict table of the copied runs every N rounds and at the end.
    - When nothing is running for two rounds in a row, it makes one last full copy, checkpoints included, and exits.
 
-**Live charts:** in a second terminal run `uv run tensorboard --logdir runs/vast` and open http://localhost:6006.
+**Live charts:** in a second terminal run `uv run tensorboard --logdir vast-runs` and open http://localhost:6006.
 - Files are updated in place, so TensorBoard picks up new points on its own.
 - The **Custom Scalars** tab overlays val accuracy by hop, the progress measures, and the per-step weight and update norms for each run.
 
 **Ctrl-C only stops the streaming;** training keeps going. To pick it back up, from this or any other machine:
 
 ```bash
-scripts/vast.sh watch $H $P --into runs/vast
+scripts/vast.sh watch $H $P
 ```
 
 ## 5. Doing it step by step
@@ -130,9 +131,9 @@ scripts/vast.sh watch $H $P --into runs/vast
 scripts/vast.sh push   $H $P
 scripts/vast.sh smoke  $H $P --suite tier1 tier2 tier3
 scripts/vast.sh launch $H $P --suite tier1 tier2 tier3 --until 20000
-scripts/vast.sh watch  $H $P --into runs/vast [--every 60] [--table 10]
+scripts/vast.sh watch  $H $P [--every 60] [--table 10]
 scripts/vast.sh status $H $P            # live jobs, the runner log, gpu use, verdicts per config
-scripts/vast.sh pull   $H $P --into runs/vast    # one full copy, checkpoints included
+scripts/vast.sh pull   $H $P    # one full copy, checkpoints included
 scripts/vast.sh shell  $H $P            # a shell on the instance, in the checkout
 ```
 
@@ -164,15 +165,15 @@ Other behaviour to know:
 - **Extending:** a run judged `slow` (restricted loss still falling at 20k) should be extended to 40k before you call it a failure. So should a run that grokked so late that its stability window runs past 20k.
 - **Preemption:**
   - same instance restarted: `launch` again;
-  - new instance: `push`, copy the run folders up (`rsync -az runs/vast/ -e "ssh -p $P" root@$H:/workspace/time-loops/runs/`), then `launch`.
+  - new instance: `push`, copy the run folders up (`rsync -az vast-runs/ -e "ssh -p $P" root@$H:/workspace/time-loops/runs/`), then `launch`.
 
 ## 7. Analyse the results locally
 
 ```bash
-uv run python src/verdicts.py --all --by-config --root runs/vast          # one row per config, 3 seeds combined
-uv run python src/verdicts.py --all --root runs/vast                      # one row per run
-uv run python src/verdicts.py --all --by-config --root runs/vast --at 40000   # after extending slow runs
-uv run python src/plot_progress.py runs/vast/t1_huginn_ref_p113_h3_x6_s41     # progress figure for one run
+uv run python src/verdicts.py --all --by-config --root vast-runs          # one row per config, 3 seeds combined
+uv run python src/verdicts.py --all --root vast-runs                      # one row per run
+uv run python src/verdicts.py --all --by-config --root vast-runs --at 40000   # after extending slow runs
+uv run python src/plot_progress.py vast-runs/t1_huginn_ref_p113_h3_x6_s41     # progress figure for one run
 ```
 
 **The verdicts:**
@@ -198,7 +199,7 @@ The seeds vary initial weights, depth draws and random starts. Every run shares 
 1. Add entries to `configs/train.yaml`: one per seed (41, 42, 43), named `<tier>_<model>_<change>_p113_h3_x6_s<seed>`, with a plain-words comment above them.
 2. Add the names to a list in `configs/suites.yaml`, seed by seed. Use an existing tier or a new list.
 3. Check locally with `uv run python src/suite.py --suite <list> --dry-run --devices 0`, then commit.
-4. Run `scripts/vast.sh up $H $P --into runs/vast --suite <list> --until 20000`.
+4. Run `scripts/vast.sh up $H $P --suite <list> --until 20000`.
 
 **Never edit an entry once its run exists;** add a new entry instead. Resuming enforces this.
 
@@ -211,9 +212,10 @@ The seeds vary initial weights, depth draws and random starts. Every run shares 
 | `a config failed its smoke test` from `up` | read the smoke table: usually out of memory (lower that entry's `chunk_size`), then commit and run `up` again |
 | `training is running on the instance` from `push` | `stop`, wait for `status` to say `nothing running`, then push |
 | `stop the running jobs first` from `launch` | same: `stop`, wait, launch |
+| the instance shows `inactive` or `scheduling`, and ssh says `connection refused` | vast stopped it (an interruptible instance was outbid, or its GPUs went to another renter while it was stopped); training stopped too. Destroy it and rent an on-demand one; to keep its runs, see preemption above. Otherwise empty `vast-runs/` first, so old TensorBoard files don't mix with the new runs |
 | `watch` shows `unreachable` | the connection dropped; it retries every round. Training is unaffected |
 | `status` lists training jobs but no runner (the runner was killed) | `stop` signals those jobs directly; they pause at their next step |
 | a run shows `skip: being trained by process N` | a live process is training it; check `status` before doing anything |
 | a run shows `skip: run directory exists with nothing to resume from` | it was killed during its first eval, before step 0 was saved; delete `runs/<name>` on the instance (`shell`) and launch again |
 | resuming refuses: `the config entry changed` | the entry was edited after the run started; restore it, or add a new entry |
-| TensorBoard doesn't update | it reads `runs/vast` as `watch` copies into it; check that `watch` is still running and printing rounds |
+| TensorBoard doesn't update | it reads `vast-runs` as `watch` copies into it; check that `watch` is still running and printing rounds |
