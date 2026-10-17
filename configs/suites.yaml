@@ -76,3 +76,30 @@ tier3:
   - t3_anchor_learnedpos_ref_p113_h3_x6_s43
   - t3_anchor_learnedpos_wd2_p113_h3_x6_s43
   - t3_huginn_wd2_p113_h3_x6_s43
+# seed 41 of every config in tiers 1, 2 and 3, in tier order: one pass over the whole suite at a third of
+# the cost, with the other seeds added later for the configs that matter
+seed41_all_tiers:
+  - t1_anchor_nope_ref_p113_h3_x6_s41
+  - t1_ut_ref_p113_h3_x6_s41
+  - t1_unshared_L8_p113_h3_x6_s41
+  - t1_ut_sandwich_p113_h3_x6_s41
+  - t1_ut_inject_p113_h3_x6_s41
+  - t1_huginn_ref_p113_h3_x6_s41
+  - t1_huginn_noprecoda_p113_h3_x6_s41
+  - t1_huginn_embedstart_p113_h3_x6_s41
+  - t1_huginn_noinject_p113_h3_x6_s41
+  - t1_huginn_fixedT8_p113_h3_x6_s41
+  - t1_huginn_mindepth2_p113_h3_x6_s41
+  - t2_ut_statenorm_ref_p113_h3_x6_s41
+  - t2_ut_T2_p113_h3_x6_s41
+  - t2_ut_precoda_p113_h3_x6_s41
+  - t2_ut_statenorm_sampled_p113_h3_x6_s41
+  - t2_huginn_nosandwich_p113_h3_x6_s41
+  - t2_huginn_fullbackprop_p113_h3_x6_s41
+  - t2_huginn_wd05_p113_h3_x6_s41
+  - t2_huginn_gainsnowd_p113_h3_x6_s41
+  - t2_huginn_innergainsnowd_p113_h3_x6_s41
+  - t2_huginn_wd0_p113_h3_x6_s41
+  - t3_anchor_learnedpos_ref_p113_h3_x6_s41
+  - t3_anchor_learnedpos_wd2_p113_h3_x6_s41
+  - t3_huginn_wd2_p113_h3_x6_s41

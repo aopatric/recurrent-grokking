@@ -149,10 +149,12 @@ def test_verdict_slow_versus_fails():
 
 
 def test_verdict_judges_at_the_given_step():
-    """grokking after the judging step doesn't count."""
+    """grokking after the judging step doesn't count, and a run short of it without grokking is in progress."""
     rows = evals([0.05] * 25 + [0.95])
     assert verdicts.verdict(rows, at=20000)["verdict"] != "groks"
     assert verdicts.verdict(rows, at=30000)["t_grok"] == 25000
+    early = verdicts.verdict(evals([0.05] * 8), at=20000)
+    assert early["verdict"] == "in progress" and list(early)[0] == "verdict"
 
 
 def test_fixed_point():

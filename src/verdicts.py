@@ -10,6 +10,7 @@ val is the mean val accuracy over the trained hops. the verdicts:
                  5k steps apart: extend the run.
     fails        not grokked, with flat restricted loss.
     diverged     not grokked, and the loss stopped being finite (training was stopped there).
+    in progress  not grokked yet, and the run hasn't reached --at (still training, or paused early).
     fits train   train >= 0.95 at the last eval up to --at (with val < 0.2 this is memorization).
     fixed point  for looped runs, val accuracy at pass 16 within 0.02 of the eval depth, at every hop.
 --by-config groups runs whose names differ only in their _s<seed> suffix.
@@ -106,13 +107,17 @@ def verdict(rows, at=20000, diverged_at=None):
                    stable=round(float(np.mean(val[win] >= GROK)), 2) if win.any() else None)
     elif diverged_at is not None:
         out["verdict"] = "diverged"
+    elif steps[-1] < at:
+        out["verdict"] = "in progress"
     else:
         drop = _restricted_drop(evals, steps, int(steps[i_end]))
         out["verdict"] = "slow" if drop > SLOW_DROP else "fails"
 
     sweeps = [r for r in rows if r["kind"] == "sweep" and r["step"] <= at]
     out["fixed_point"] = fixed_point(sweeps[-1]) if sweeps else None
-    return out
+    order = ["verdict", "t_grok", "stable", "window_end", "val", "train", "fits_train", "restricted", "fixed_point",
+             "diverged_at", "last_step"]
+    return {k: out[k] for k in order}
 
 
 def load_rows(run_dir):
@@ -170,7 +175,7 @@ def summarize(results):
         results: dict from run name to verdict dict.
     returns:
         dict from config name to a summary: seeds, groks (k/n), t_grok_median, stable_mean, fixed_point (k/n
-        of seeds where it was measured), and counts of slow, fails and diverged.
+        of seeds where it was measured), and counts of slow, fails, diverged and in-progress runs.
     """
     groups = {}
     for name, r in results.items():
@@ -190,6 +195,7 @@ def summarize(results):
             "slow": sum(r["verdict"] == "slow" for r in rs),
             "fails": sum(r["verdict"] == "fails" for r in rs),
             "diverged": sum(r["verdict"] == "diverged" for r in rs),
+            "in_progress": sum(r["verdict"] == "in progress" for r in rs),
             "val_median": round(float(np.median([r["val"] for r in rs])), 3),
         }
     return out

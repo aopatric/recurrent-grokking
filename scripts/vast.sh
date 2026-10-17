@@ -11,7 +11,8 @@
 #   scripts/vast.sh stop   HOST PORT                  pause every running job at its next step
 #   scripts/vast.sh shell  HOST PORT                  open a shell in the remote checkout
 #
-# OPTS: --into DIR (default runs/vast), --every SECONDS (default 60), --no-smoke (up only).
+# OPTS: --into DIR (default runs/vast), --every SECONDS (default 60), --no-smoke (up only),
+#       --table N (up and watch: print the verdict table of the copied runs every N rounds and at the end).
 # ARGS for up and launch are src/suite.py arguments, e.g. --suite tier1 tier2 --until 20000.
 # env: VAST_USER (default root), VAST_DIR (default /workspace), ALLOW_DIRTY=1 to ship HEAD despite uncommitted
 # changes to tracked files.
@@ -23,12 +24,13 @@ cmd=$1 host=$2 port=$3
 shift 3
 
 # options shared by up, watch and pull; everything else is passed on
-into=runs/vast every=60 smoke=1 rest=()
+into=runs/vast every=60 smoke=1 table=0 rest=()
 while [ $# -gt 0 ]; do
   case $1 in
     --into) into=$2; shift 2 ;;
     --every) every=$2; shift 2 ;;
     --no-smoke) smoke=0; shift ;;
+    --table) table=$2; shift 2 ;;
     *) rest+=("$1"); shift ;;
   esac
 done
@@ -39,7 +41,7 @@ base=${VAST_DIR:-/workspace}
 repo="$base/time-loops"
 here=$(cd "$(dirname "$0")/.." && pwd)
 ssh_opts=(-p "$port" -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30
-          -o ControlMaster=auto -o "ControlPath=$HOME/.ssh/cm-vast-%r@%h:%p" -o ControlPersist=10m)
+          -o ControlMaster=auto -o "ControlPath=$HOME/.ssh/cm-vast-%C" -o ControlPersist=10m)
 target="$user@$host"
 # the shared-connection socket lives here
 mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
@@ -47,6 +49,14 @@ mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
 remote() { ssh "${ssh_opts[@]}" "$target" "export PATH=\$HOME/.local/bin:\$PATH; set -euo pipefail; $1"; }
 sync_up() { rsync -az --info=stats1 -e "ssh ${ssh_opts[*]}" "$@"; }
 quote() { printf '%q ' "$@"; }
+
+# the verdict table of the runs copied so far, computed locally
+show_table() {
+  local py="$here/.venv/bin/python"
+  [ -x "$py" ] || py="uv run python"
+  echo "== verdicts so far (in-progress runs are judged at their latest eval; see last_step)"
+  $py "$here/src/verdicts.py" --all --root "$into" || true
+}
 
 # copy the instance's runs/ into $into. files are rewritten in place, so a tensorboard reading them keeps
 # seeing new events; checkpoints are left for the final copy unless $1 is "full"
@@ -117,8 +127,9 @@ watch)
   echo "== streaming $target:$repo/runs into $into every ${every}s"
   echo "   view live with: uv run tensorboard --logdir $into"
   echo "   ctrl-c stops the streaming only; training keeps going (watch again to pick it back up)"
-  idle=0
+  idle=0 round=0
   while :; do
+    round=$((round + 1))
     fetch || echo "   (copy failed; retrying next round)"
     state=$(remote "cd $repo && { .venv/bin/python src/suite.py --running || true; }
                     echo '~'; tail -n 1 runs/suite.log 2>/dev/null || true" 2>/dev/null) || state="unreachable"
@@ -126,6 +137,7 @@ watch)
     last=$(sed '1,/^~$/d' <<<"$state")
     echo "$(date '+%H:%M:%S')  $(grep -c . <<<"$live" || true) training  |  runner: ${last:-$state}"
     [ -z "$live" ] || sed 's/^training: /    /' <<<"$live"
+    if [ "$table" -gt 0 ] && [ $((round % table)) -eq 0 ]; then show_table; fi
     # two idle rounds in a row, so a runner that is still starting up isn't mistaken for a finished one
     if grep -q '^nothing running' <<<"$state"; then idle=$((idle + 1)); else idle=0; fi
     [ "$idle" -ge 2 ] && break
@@ -133,6 +145,7 @@ watch)
   done
   echo "== nothing is running; final copy, checkpoints included"
   fetch full
+  [ "$table" -gt 0 ] && show_table
   echo "== results in $into"
   echo "   uv run python src/verdicts.py --all --by-config --root $into"
   ;;
@@ -156,7 +169,7 @@ up)
   fi
   echo "== launching"
   "$0" launch "$host" "$port" "$@"
-  "$0" watch "$host" "$port" --into "$into" --every "$every"
+  "$0" watch "$host" "$port" --into "$into" --every "$every" --table "$table"
   ;;
 status)
   remote "cd $repo

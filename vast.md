@@ -10,6 +10,12 @@ scripts/vast.sh up $H $P --into runs/vast --suite tier1 tier2 tier3 --until 2000
 uv run tensorboard --logdir runs/vast               # in a second terminal: live charts
 ```
 
+**Single-seed pass** (seed 41 of all 24 configs, about a third of the cost) with a live verdict table:
+
+```bash
+scripts/single-seed-three-suites.sh $H $P          # = vast.sh up --table 10 --suite seed41_all_tiers --until 20000
+```
+
 The rest of this page explains each piece.
 
 ---
@@ -19,7 +25,7 @@ The rest of this page explains each piece.
 | piece | what it does |
 |---|---|
 | `configs/train.yaml` | every run: model, depth rule, optimizer, seed. Suite runs are named `<tier>_<model>_<change>_p113_h3_x6_s<seed>`, at seeds 41, 42, 43 |
-| `configs/suites.yaml` | named run lists: `tier1` (where grokking breaks and comes back), `tier2` (follow-ups and regularization), `tier3` (optional) |
+| `configs/suites.yaml` | named run lists: `tier1` (where grokking breaks and comes back), `tier2` (follow-ups and regularization), `tier3` (optional), and `seed41_all_tiers` (seed 41 of everything) |
 | `src/train.py` | trains one run into `runs/<name>/`. It is resumable and logs metrics, per-step stats and TensorBoard events |
 | `src/suite.py` | the runner: keeps one run per GPU, resumes stopped runs, pauses everything cleanly on a signal |
 | `src/smoke.py` | trains each distinct config for a few steps; reports GPU memory and time per 20k steps |
@@ -56,21 +62,21 @@ git status                                                               # commi
 ## 3. Rent an instance
 
 On the **Search** page:
-- **GPU:** RTX 4090 or 3090; 8 GPUs is a good size. The models are tiny, so A100s and H100s buy nothing.
+- **GPU:** RTX 5090, 4090 or 3090; 8 GPUs is a good size. Training runs in true fp32 (TF32 off), where consumer cards beat A100s and H100s, which cost more.
 - **CUDA:** filter for **max CUDA ≥ 13.0**. The lockfile pins a CUDA 13 build of torch.
 - **RAM:** at least 32 GB, since each job holds a few GB of host memory.
 - **Disk:** at least 30 GB. All 72 suite runs come to roughly 8 GB.
 - **Image:** any Ubuntu or CUDA image with ssh launch, e.g. `vastai/base-image` or a `pytorch/pytorch` image.
 
-**Expected time on 8×4090**, from a smoke test on a 4090, judged at 20k steps:
+**Expected wall time**, judged at 20k steps, from a smoke test on a 4090. The 8×5090 column assumes a 5090 is about 1.25× a 4090, which is not yet measured.
 
-| suites | runs | wall time |
-|---|---|---|
-| tier 1 | 33 | ~4.5 h |
-| tiers 1+2 | 63 | ~8.5 h |
-| all tiers | 72 | ~9 h |
+| suites | runs | 8×4090 | 8×5090 |
+|---|---|---|---|
+| tier 1 | 33 | ~4.5 h | ~3.5 h |
+| all tiers | 72 | ~9 h | ~7.5 h |
+| `seed41_all_tiers` | 24 | ~3.4 h | ~2.7 h |
 
-Allow about 25% more.
+Allow about 25% more. With one seed, the slowest run (`huginn_fullbackprop`, about 1.7 h on a 4090) sets the floor.
 
 When it's running, click **Connect**. For `ssh -p 41234 root@ssh5.vast.ai`, HOST is `ssh5.vast.ai` and PORT is `41234`:
 
@@ -103,6 +109,7 @@ scripts/vast.sh up $H $P --into runs/vast --suite tier1 tier2 tier3 --until 2000
        ...
    ```
    - Checkpoints are left out while runs are going.
+   - With `--table N`, it also prints the verdict table of the copied runs every N rounds and at the end.
    - When nothing is running for two rounds in a row, it makes one last full copy, checkpoints included, and exits.
 
 **Live charts:** in a second terminal run `uv run tensorboard --logdir runs/vast` and open http://localhost:6006.
@@ -123,7 +130,7 @@ scripts/vast.sh watch $H $P --into runs/vast
 scripts/vast.sh push   $H $P
 scripts/vast.sh smoke  $H $P --suite tier1 tier2 tier3
 scripts/vast.sh launch $H $P --suite tier1 tier2 tier3 --until 20000
-scripts/vast.sh watch  $H $P --into runs/vast [--every 60]
+scripts/vast.sh watch  $H $P --into runs/vast [--every 60] [--table 10]
 scripts/vast.sh status $H $P            # live jobs, the runner log, gpu use, verdicts per config
 scripts/vast.sh pull   $H $P --into runs/vast    # one full copy, checkpoints included
 scripts/vast.sh shell  $H $P            # a shell on the instance, in the checkout
@@ -177,6 +184,7 @@ uv run python src/plot_progress.py runs/vast/t1_huginn_ref_p113_h3_x6_s41     # 
 | **slow** | not grokked, but restricted loss still falling |
 | **fails** | not grokked, restricted loss flat |
 | **diverged** | the loss stopped being finite |
+| **in progress** | not grokked yet and short of the judged step (still training or paused) |
 | **fixed point** | looped runs only: the answer holds from the training depth out to 16 passes |
 
 **For one run in depth:** open `notebooks/run-analysis.ipynb` and set `RUN_DIR` to its folder. It rebuilds everything from the folder and analyses the last checkpoint (`step_0020000.pt` for a run stopped at 20k).
