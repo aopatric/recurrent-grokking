@@ -103,3 +103,16 @@ seed41_all_tiers:
   - t3_anchor_learnedpos_ref_p113_h3_x6_s41
   - t3_anchor_learnedpos_wd2_p113_h3_x6_s41
   - t3_huginn_wd2_p113_h3_x6_s41
+
+# the runs that settle whether a state norm alone is enough: seeds 42 and 43 of the state-norm ut and of
+# huginn with a state norm in place of the sandwich, then one huginn piece at a time added to the
+# state-norm ut with sampled depth (seed 41)
+missing_ablations:
+  - t2_ut_statenorm_ref_p113_h3_x6_s42
+  - t2_ut_statenorm_ref_p113_h3_x6_s43
+  - t2_huginn_nosandwich_p113_h3_x6_s42
+  - t2_huginn_nosandwich_p113_h3_x6_s43
+  - t4_ut_statenorm_sampled_trunc_p113_h3_x6_s41
+  - t4_ut_statenorm_sampled_precoda_p113_h3_x6_s41
+  - t4_ut_statenorm_sampled_inject_p113_h3_x6_s41
+  - t4_ut_statenorm_sampled_inject_randstart_p113_h3_x6_s41

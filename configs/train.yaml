@@ -662,3 +662,99 @@ runs:
     depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24, grad_iters: 4}
     optim: {weight_decay: 2.0}
     train: {steps: 40000, eval_every: 100, sweep_every: 1000, eval_T_max: 32}
+
+  # follow-ups: which huginn piece stops a state norm alone from being enough. each adds one piece
+  # to the state-norm ut with sampled depth, which groks without block norms
+
+  # state-norm ut with sampled depth, plus truncated backprop through the last 4 passes
+  - name: t4_ut_statenorm_sampled_trunc_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: none, n_prelude: 0, k: 1, core_shared: true,
+            injection: none, state_init: embed, n_coda: 0, state_norm: true}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24, grad_iters: 4}
+    train: {steps: 40000, eval_every: 100, sweep_every: 1000, eval_T_max: 32}
+  - name: t4_ut_statenorm_sampled_trunc_p113_h3_x6_s42
+    data: p113_h3_x6
+    seed: 42
+    model: {pos: none, norm: none, n_prelude: 0, k: 1, core_shared: true,
+            injection: none, state_init: embed, n_coda: 0, state_norm: true}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24, grad_iters: 4}
+    train: {steps: 40000, eval_every: 100, sweep_every: 1000, eval_T_max: 32}
+  - name: t4_ut_statenorm_sampled_trunc_p113_h3_x6_s43
+    data: p113_h3_x6
+    seed: 43
+    model: {pos: none, norm: none, n_prelude: 0, k: 1, core_shared: true,
+            injection: none, state_init: embed, n_coda: 0, state_norm: true}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24, grad_iters: 4}
+    train: {steps: 40000, eval_every: 100, sweep_every: 1000, eval_T_max: 32}
+
+  # state-norm ut with sampled depth, plus one plain layer before the loop and one after it
+  - name: t4_ut_statenorm_sampled_precoda_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: none, n_prelude: 1, k: 1, core_shared: true,
+            injection: none, state_init: embed, n_coda: 1, state_norm: true}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24}
+    train: {steps: 40000, eval_every: 100, sweep_every: 1000, eval_T_max: 32}
+  - name: t4_ut_statenorm_sampled_precoda_p113_h3_x6_s42
+    data: p113_h3_x6
+    seed: 42
+    model: {pos: none, norm: none, n_prelude: 1, k: 1, core_shared: true,
+            injection: none, state_init: embed, n_coda: 1, state_norm: true}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24}
+    train: {steps: 40000, eval_every: 100, sweep_every: 1000, eval_T_max: 32}
+  - name: t4_ut_statenorm_sampled_precoda_p113_h3_x6_s43
+    data: p113_h3_x6
+    seed: 43
+    model: {pos: none, norm: none, n_prelude: 1, k: 1, core_shared: true,
+            injection: none, state_init: embed, n_coda: 1, state_norm: true}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24}
+    train: {steps: 40000, eval_every: 100, sweep_every: 1000, eval_T_max: 32}
+
+  # state-norm ut with sampled depth, plus concat injection of the embedded input each pass,
+  # still starting from the embedding
+  - name: t4_ut_statenorm_sampled_inject_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: none, n_prelude: 0, k: 1, core_shared: true,
+            injection: concat, state_init: embed, n_coda: 0, state_norm: true}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24}
+    train: {steps: 40000, eval_every: 100, sweep_every: 1000, eval_T_max: 32}
+  - name: t4_ut_statenorm_sampled_inject_p113_h3_x6_s42
+    data: p113_h3_x6
+    seed: 42
+    model: {pos: none, norm: none, n_prelude: 0, k: 1, core_shared: true,
+            injection: concat, state_init: embed, n_coda: 0, state_norm: true}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24}
+    train: {steps: 40000, eval_every: 100, sweep_every: 1000, eval_T_max: 32}
+  - name: t4_ut_statenorm_sampled_inject_p113_h3_x6_s43
+    data: p113_h3_x6
+    seed: 43
+    model: {pos: none, norm: none, n_prelude: 0, k: 1, core_shared: true,
+            injection: concat, state_init: embed, n_coda: 0, state_norm: true}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24}
+    train: {steps: 40000, eval_every: 100, sweep_every: 1000, eval_T_max: 32}
+
+  # state-norm ut with sampled depth, plus concat injection and a random-noise starting state
+  - name: t4_ut_statenorm_sampled_inject_randstart_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: none, n_prelude: 0, k: 1, core_shared: true,
+            injection: concat, state_init: random, n_coda: 0, state_norm: true}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24}
+    train: {steps: 40000, eval_every: 100, sweep_every: 1000, eval_T_max: 32}
+  - name: t4_ut_statenorm_sampled_inject_randstart_p113_h3_x6_s42
+    data: p113_h3_x6
+    seed: 42
+    model: {pos: none, norm: none, n_prelude: 0, k: 1, core_shared: true,
+            injection: concat, state_init: random, n_coda: 0, state_norm: true}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24}
+    train: {steps: 40000, eval_every: 100, sweep_every: 1000, eval_T_max: 32}
+  - name: t4_ut_statenorm_sampled_inject_randstart_p113_h3_x6_s43
+    data: p113_h3_x6
+    seed: 43
+    model: {pos: none, norm: none, n_prelude: 0, k: 1, core_shared: true,
+            injection: concat, state_init: random, n_coda: 0, state_norm: true}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24}
+    train: {steps: 40000, eval_every: 100, sweep_every: 1000, eval_T_max: 32}

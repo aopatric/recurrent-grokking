@@ -16,6 +16,12 @@ uv run tensorboard --logdir vast-runs               # in a second terminal: live
 scripts/single-seed-three-suites.sh $H $P          # = vast.sh up --table 10 --suite seed41_all_tiers --until 20000
 ```
 
+**Follow-up ablations** (8 runs, one round on 8 GPUs, about an hour on 5090s with setup), streamed into the same `vast-runs/` next to the earlier runs:
+
+```bash
+scripts/missing-ablations.sh $H $P                 # = vast.sh up --table 10 --suite missing_ablations --until 20000
+```
+
 The rest of this page explains each piece.
 
 ---
@@ -25,7 +31,7 @@ The rest of this page explains each piece.
 | piece | what it does |
 |---|---|
 | `configs/train.yaml` | every run: model, depth rule, optimizer, seed. Suite runs are named `<tier>_<model>_<change>_p113_h3_x6_s<seed>`, at seeds 41, 42, 43 |
-| `configs/suites.yaml` | named run lists: `tier1` (where grokking breaks and comes back), `tier2` (follow-ups and regularization), `tier3` (optional), and `seed41_all_tiers` (seed 41 of everything) |
+| `configs/suites.yaml` | named run lists: `tier1` (where grokking breaks and comes back), `tier2` (follow-ups and regularization), `tier3` (optional), `seed41_all_tiers` (seed 41 of everything), and `missing_ablations` (whether a state norm alone is enough) |
 | `src/train.py` | trains one run into `runs/<name>/`. It is resumable and logs metrics, per-step stats and TensorBoard events |
 | `src/suite.py` | the runner: keeps one run per GPU, resumes stopped runs, pauses everything cleanly on a signal |
 | `src/smoke.py` | trains each distinct config for a few steps; reports GPU memory and time per 20k steps |
