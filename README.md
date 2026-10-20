@@ -1,4 +1,4 @@
-# time loops: the clock algorithm in looped models
+# a (partial) recipe for recurrent grokking
 
 code is MIT licensed.
 
