@@ -35,8 +35,14 @@ _RUN_KEYS = {"name", "data", "seed", "model", "depth", "train"}
 _OPTIONAL_RUN_KEYS = {"optim"}
 _TRAIN_REQUIRED = {"steps", "eval_every", "sweep_every", "eval_T_max"}
 _TRAIN_DEFAULTS = {"n_checkpoints": 25, "chunk_size": 8192, "resume_every": 1000, "log_steps": True}
-# nanda's settings, from his progress-measures training code
-_OPTIM_DEFAULTS = {"lr": 1e-3, "weight_decay": 1.0, "betas": [0.9, 0.98], "warmup_steps": 10, "no_decay": []}
+# nanda's settings, from his progress-measures training code. lr_schedule "tail" holds the lr after warmup,
+# then decays it linearly over the last decay_frac of train.steps to decay_to * lr; clip_grad_norm clips the
+# global gradient norm before each step, from clip_start on (null: from the start; "decay": from where the tail
+# decay begins; or a step number). wd_off_at turns weight decay off from a step on (same values as clip_start;
+# null keeps it on). the defaults leave all of this off, so older runs are unchanged
+_OPTIM_DEFAULTS = {"lr": 1e-3, "weight_decay": 1.0, "betas": [0.9, 0.98], "warmup_steps": 10, "no_decay": [],
+                   "lr_schedule": "constant", "decay_frac": 0.3, "decay_to": 0.01, "clip_grad_norm": None,
+                   "clip_start": None, "wd_off_at": None}
 _MODEL_DERIVED = {"p", "n_ctx", "n_core_copies"}
 _EVAL_FILES = ("extrap_depth", "systematic", "systematic_extrap")
 
@@ -92,6 +98,19 @@ def validate_entry(entry):
     nd = entry.get("optim", {}).get("no_decay", [])
     if not isinstance(nd, list) or not all(isinstance(x, str) and x for x in nd):
         errs.append("optim.no_decay must be a list of parameter-name substrings")
+    op = {**_OPTIM_DEFAULTS, **entry.get("optim", {})}
+    if op["lr_schedule"] not in ("constant", "tail"):
+        errs.append("optim.lr_schedule must be constant or tail")
+    if not 0 < op["decay_frac"] <= 1 or not 0 <= op["decay_to"] <= 1:
+        errs.append("optim.decay_frac must be in (0, 1] and optim.decay_to in [0, 1]")
+    if op["clip_grad_norm"] is not None and not op["clip_grad_norm"] > 0:
+        errs.append("optim.clip_grad_norm must be positive or null")
+    cs = op["clip_start"]
+    if not (cs is None or cs == "decay" or (isinstance(cs, int) and not isinstance(cs, bool) and cs >= 0)):
+        errs.append("optim.clip_start must be null, \"decay\" or a step number >= 0")
+    wo = op["wd_off_at"]
+    if not (wo is None or wo == "decay" or (isinstance(wo, int) and not isinstance(wo, bool) and wo >= 0)):
+        errs.append("optim.wd_off_at must be null, \"decay\" or a step number >= 0")
     if derived := set(entry["model"]) & _MODEL_DERIVED:
         errs.append(f"model: {sorted(derived)} are set from the data and depth, not the config")
     try:
@@ -490,6 +509,28 @@ def param_groups(model, weight_decay, no_decay):
             {"params": [prm for (_, prm), sk in zip(named, skip) if sk], "weight_decay": 0.0}]
 
 
+def lr_multiplier(op, steps):
+    """the lr multiplier as a function of step: linear warmup, then constant or a linear tail decay.
+
+    args:
+        op: resolved optim settings.
+        steps: train.steps, which the tail decay is placed against.
+    returns:
+        function from step to multiplier.
+    """
+    warm = op["warmup_steps"]
+    start = steps * (1 - op["decay_frac"])
+
+    def f(s):
+        """multiplier at step s."""
+        if warm and s < warm:
+            return s / warm
+        if op["lr_schedule"] == "constant" or s <= start:
+            return 1.0
+        return 1.0 + (op["decay_to"] - 1.0) * min((s - start) / (steps - start), 1.0)
+    return f
+
+
 def _module_group(name):
     """the per-step logging group of a parameter: norm gains together, everything else by top-level module.
 
@@ -594,8 +635,8 @@ def train(entry, cfg, device, max_steps=None, resume=False, until=None, log=prin
         model = models.LoopedTransformer(mcfg).to(device)
         opt = t.optim.AdamW(param_groups(model, op["weight_decay"], op["no_decay"]), lr=op["lr"],
                             betas=tuple(op["betas"]))
-        warm = op["warmup_steps"]
-        sched = t.optim.lr_scheduler.LambdaLR(opt, lambda s: min(s / warm, 1) if warm else 1.0)
+        # placed against train.steps, not max_steps or --until, so a paused run resumes on the same schedule
+        sched = t.optim.lr_scheduler.LambdaLR(opt, lr_multiplier(op, tr["steps"]))
         rng = dp.depth_rng(seed)
         state_gen = t.Generator(device=device).manual_seed(seed)
         start = 0
@@ -641,6 +682,12 @@ def train(entry, cfg, device, max_steps=None, resume=False, until=None, log=prin
         train_sets = data["sets"]["train"]
         grid_tokens, grid_labels, grid_train = data["grid"]
         ckpts = set(checkpoint_steps(steps, tr["n_checkpoints"]))
+        # first 0-based step that clips; "decay" lines up with the tail schedule's start in lr_multiplier
+        cs = op["clip_start"]
+        decay_start = math.ceil(tr["steps"] * (1 - op["decay_frac"]))
+        clip_from = 0 if cs is None else (decay_start if cs == "decay" else cs)
+        wo = op["wd_off_at"]
+        wd_off_from = None if wo is None else (decay_start if wo == "decay" else wo)
         eval_T = rule.eval_depth()
         can_sweep = mcfg.core_shared and tr["eval_T_max"] > 1
         stop = steps if until is None else min(until, steps)
@@ -710,6 +757,13 @@ def train(entry, cfg, device, max_steps=None, resume=False, until=None, log=prin
                 break
             if tr["log_steps"]:
                 before = {n: prm.detach().clone() for n, prm in model.named_parameters()}
+            # set every step rather than once, so a resumed run (whose optimizer state carries the old value) agrees
+            if wd_off_from is not None and step >= wd_off_from:
+                for g in opt.param_groups:
+                    g["weight_decay"] = 0.0
+            clipping = op["clip_grad_norm"] is not None and step >= clip_from
+            if clipping:
+                pre_clip = float(t.nn.utils.clip_grad_norm_(model.parameters(), op["clip_grad_norm"]))
             opt.step()
             sched.step()
             rule.update(r, total)
@@ -717,7 +771,10 @@ def train(entry, cfg, device, max_steps=None, resume=False, until=None, log=prin
             done = step + 1
             if tr["log_steps"]:
                 grad_norm, groups = step_stats(model, before)
-                row = {"step": done, "depth": r, "loss": total, "grad_norm": grad_norm, "groups": groups}
+                # per-group grads are after clipping; the logged global norm is from before it
+                if clipping:
+                    grad_norm = pre_clip
+                row ={"step": done, "depth": r, "loss": total, "grad_norm": grad_norm, "groups": groups}
                 with open(run_dir / "steps.jsonl", "a") as f:
                     f.write(json.dumps(row) + "\n")
                 tb_log.write_step(writer, row)

@@ -1,7 +1,10 @@
 """tests for the model components."""
 
+import math
+
 import pytest
 import torch as t
+import torch.nn.functional as F
 
 import models
 
@@ -205,3 +208,39 @@ def test_state_norm_toggle():
     normed(tokens(2, 2), 6)
     rms = cache[("hook_state", 5)].pow(2).mean(-1)
     assert t.allclose(rms, t.ones_like(rms), atol=1e-3)
+
+
+@pytest.mark.parametrize("injection, retain0", [("parcae", 1 / math.sqrt(5)), ("parcae_nonorm", math.exp(-1))])
+def test_parcae_injection(injection, retain0):
+    """parcae injection starts at its paper init: retention in (0, 1), W = I, and the input norm only when named."""
+    m = small_model(injection=injection, state_init="random")
+    assert t.allclose(m.retention(), t.full_like(m.retention(), retain0), atol=1e-6)
+    assert t.equal(m.W_inj, t.eye(m.cfg.d_model))
+    assert (m.inj_norm is not None) == (injection == "parcae")
+    s, e = t.randn(2, 4, m.cfg.d_model), t.randn(2, 4, m.cfg.d_model)
+    e_in = m.inj_norm(e) if m.inj_norm is not None else e
+    delta = F.softplus(m.delta_raw)
+    assert t.allclose(m.inject(s, e), m.retention() * s + delta * e_in, atol=1e-6)
+    assert m(tokens(3, 2), 5).shape == (3, m.cfg.p)
+
+
+@pytest.mark.parametrize("norm", ["none", "rms_sandwich"])
+def test_unshared_with_identical_copies_matches_shared(norm):
+    """an unshared core whose copies all hold the shared block's weights computes exactly the shared loop,
+    so the shared-vs-unshared comparison differs only in weight sharing."""
+    shared = small_model(norm=norm)
+    unshared = small_model(norm=norm, core_shared=False, n_core_copies=3)
+    sd = shared.state_dict()
+    unshared.load_state_dict({k: sd[k.replace(f"core.{k.split('.')[1]}.", "core.0.", 1)] if k.startswith("core.") else sd[k]
+                              for k in unshared.state_dict()})
+    x = tokens(4, 3)
+    for T in (1, 2, 3):
+        assert t.equal(unshared(x, T), shared(x, T))
+
+
+def test_one_pass_loop_is_the_anchor():
+    """the plain loop at T = 1 is the one-layer anchor: same parameters, same outputs."""
+    anchor, loop = small_model(), small_model()
+    assert [n for n, _ in anchor.named_parameters()] == [n for n, _ in loop.named_parameters()]
+    x = tokens(4, 2)
+    assert t.equal(loop(x, 1), anchor(x, 1))

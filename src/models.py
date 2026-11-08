@@ -3,6 +3,8 @@
 # adapted from neel nanda's fixed-depth implementation:
 # https://github.com/mechanistic-interpretability-grokking/progress-measures-paper/blob/main/transformers.py
 
+import math
+
 import torch as t
 import torch.nn as nn
 import numpy as np
@@ -413,7 +415,7 @@ class ModelConfig:
     k: int = 1                      # layers in the core block
     core_shared: bool = True
     n_core_copies: int = 1          # distinct core blocks; > 1 only when core_shared is false
-    injection: str = "none"         # none | concat | add
+    injection: str = "none"         # none | concat | add | parcae | parcae_nonorm
     state_init: str = "embed"       # embed | random
     n_coda: int = 0
     state_norm: bool = False        # rms norm on the state after every pass; always on with rms_sandwich
@@ -448,7 +450,8 @@ class ModelConfig:
         """
         errs = []
         for name, allowed in [("pos", ("none", "learned")), ("norm", ("none", "rms_sandwich")),
-                              ("injection", ("none", "concat", "add")), ("state_init", ("embed", "random"))]:
+                              ("injection", ("none", "concat", "add", "parcae", "parcae_nonorm")),
+                              ("state_init", ("embed", "random"))]:
             if getattr(self, name) not in allowed:
                 errs.append(f"{name} must be one of {allowed}, got {getattr(self, name)!r}")
         if self.pos == "learned" and self.n_ctx < 1:
@@ -493,6 +496,17 @@ class LoopedTransformer(nn.Module):
         self.core = nn.ModuleList(blocks(cfg.k) for _ in range(cfg.n_core_copies))
         if cfg.injection == "concat":
             self.W_A = nn.Parameter(t.randn(d, 2 * d) / np.sqrt(2 * d))
+        if cfg.injection.startswith("parcae"):
+            # parcae's diagonal injection, as specified in looped-models-done-right-2 (table 7, eq. 24):
+            # retention lambda = exp(-delta * alpha) in (0, 1), injected input q = delta * W e.
+            # init W = I, alpha = 1, and delta = log(5) / 2 (retention 1 / sqrt 5) with the input norm,
+            # delta = 1 without it ("parcae w/o norm")
+            delta0 = 0.5 * math.log(5) if cfg.injection == "parcae" else 1.0
+            self.W_inj = nn.Parameter(t.eye(d))
+            # inverse softplus, so softplus(delta_raw) starts at delta0
+            self.delta_raw = nn.Parameter(t.full((d,), math.log(math.expm1(delta0))))
+            self.alpha_raw = nn.Parameter(t.zeros(d))
+            self.inj_norm = RMSNorm(d) if cfg.injection == "parcae" else None
         self.core_norm = RMSNorm(d) if cfg.norm == "rms_sandwich" or cfg.state_norm else None
         self.coda = blocks(cfg.n_coda)
         self.coda_norm = RMSNorm(d) if cfg.norm == "rms_sandwich" else None
@@ -538,7 +552,25 @@ class LoopedTransformer(nn.Module):
             return t.einsum('dc,bpc->bpd', self.W_A, t.cat([s, e], dim=-1))
         if self.cfg.injection == "add":
             return s + e
+        if self.cfg.injection.startswith("parcae"):
+            delta = F.softplus(self.delta_raw)
+            retain = t.exp(-delta * t.exp(self.alpha_raw))
+            if self.inj_norm is not None:
+                e = self.inj_norm(e)
+            return retain * s + delta * t.einsum('dc,bpc->bpd', self.W_inj, e)
         return s
+
+    def retention(self):
+        """the per-channel state retention of the parcae injection.
+
+        returns:
+            tensor of shape (d_model,) in (0, 1).
+        raises:
+            ValueError: if the model doesn't use parcae injection.
+        """
+        if not self.cfg.injection.startswith("parcae"):
+            raise ValueError("retention is only defined for parcae injection")
+        return t.exp(-F.softplus(self.delta_raw) * t.exp(self.alpha_raw))
 
     def readout(self, s, iteration):
         """run the coda and unembed the last position.

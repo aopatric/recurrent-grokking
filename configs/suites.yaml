@@ -116,3 +116,50 @@ missing_ablations:
   - t4_ut_statenorm_sampled_precoda_p113_h3_x6_s41
   - t4_ut_statenorm_sampled_inject_p113_h3_x6_s41
   - t4_ut_statenorm_sampled_inject_randstart_p113_h3_x6_s41
+
+# shared vs unshared sandwich loops under the constant and fixed recipes (seed 41 first, then 42); the 2-layer
+# positive control for depth runs first
+shared_vs_unshared:
+  - t5_unshared_sandwich_L2_const_p113_h3_x6_s41
+  - t5_unshared_sandwich_L2_fix_p113_h3_x6_s41
+  - t5_ut_sandwich_const_p113_h3_x6_s41
+  - t5_ut_sandwich_fix_p113_h3_x6_s41
+  - t5_unshared_sandwich_const_p113_h3_x6_s41
+  - t5_unshared_sandwich_fix_p113_h3_x6_s41
+shared_vs_unshared_s42:
+  - t5_unshared_sandwich_L2_const_p113_h3_x6_s42
+  - t5_unshared_sandwich_L2_fix_p113_h3_x6_s42
+  - t5_ut_sandwich_const_p113_h3_x6_s42
+  - t5_ut_sandwich_fix_p113_h3_x6_s42
+  - t5_unshared_sandwich_const_p113_h3_x6_s42
+  - t5_unshared_sandwich_fix_p113_h3_x6_s42
+# parcae injection without norm layers
+parcae:
+  - t5_huginn_parcae_nonorm_p113_h3_x6_s41
+  - t5_huginn_parcae_sandwich_p113_h3_x6_s41
+parcae_s42:
+  - t5_huginn_parcae_nonorm_p113_h3_x6_s42
+  - t5_huginn_parcae_sandwich_p113_h3_x6_s42
+# two-phase from-scratch recipe: constant until 14k, then clipping + lr decay (seed 41)
+two_phase:
+  - t6_huginn_twophase_p113_h3_x6_s41
+  - t6_ut_statenorm_twophase_p113_h3_x6_s41
+  - t6_ut_sandwich_twophase_p113_h3_x6_s41
+# does injection alone learn a fixed point at fixed depth? (state-norm ut + injection, +/- truncation; seed 41)
+inject_fixedpoint:
+  - t7_ut_statenorm_inject_twophase_p113_h3_x6_s41
+  - t7_ut_statenorm_inject_trunc_twophase_p113_h3_x6_s41
+# decay-off recipe: nanda's recipe until 14k, then weight decay off (seed 41)
+decay_off:
+  - t8_huginn_wdoff_p113_h3_x6_s41
+  - t8_ut_statenorm_wdoff_p113_h3_x6_s41
+  - t8_ut_sandwich_wdoff_p113_h3_x6_s41
+# closing plan: seed 42 of the comparisons the story rests on (two-phase x3, shared vs unshared on nanda's recipe,
+# 2-layer control on nanda's recipe)
+closing_s42:
+  - t6_huginn_twophase_p113_h3_x6_s42
+  - t6_ut_statenorm_twophase_p113_h3_x6_s42
+  - t6_ut_sandwich_twophase_p113_h3_x6_s42
+  - t5_ut_sandwich_const_p113_h3_x6_s42
+  - t5_unshared_sandwich_const_p113_h3_x6_s42
+  - t5_unshared_sandwich_L2_const_p113_h3_x6_s42

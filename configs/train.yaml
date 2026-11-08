@@ -758,3 +758,236 @@ runs:
             injection: concat, state_init: random, n_coda: 0, state_norm: true}
     depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24}
     train: {steps: 40000, eval_every: 100, sweep_every: 1000, eval_T_max: 32}
+
+  # shared vs unshared under the same sandwich norms, fixed T = 8 (an unshared core needs fixed depth), each
+  # under nanda's constant lr (const) and the fixed recipe (fix: lr held, then decayed over the last 30% to 1%,
+  # plus clipping at 1.0). 20k steps, since the sandwich loop took 11.3k to grok at s41. the const shared run
+  # repeats t1_ut_sandwich on this machine with sparser evals
+  - name: t5_ut_sandwich_const_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: rms_sandwich, n_prelude: 0, k: 1, core_shared: true,
+            injection: none, state_init: embed, n_coda: 0}
+    depth: {rule: fixed, T: 8}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}
+  - name: t5_ut_sandwich_fix_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: rms_sandwich, n_prelude: 0, k: 1, core_shared: true,
+            injection: none, state_init: embed, n_coda: 0}
+    depth: {rule: fixed, T: 8}
+    optim: {lr_schedule: tail, decay_frac: 0.3, decay_to: 0.01, clip_grad_norm: 1.0}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}
+  - name: t5_unshared_sandwich_const_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: rms_sandwich, n_prelude: 0, k: 1, core_shared: false,
+            injection: none, state_init: embed, n_coda: 0}
+    depth: {rule: fixed, T: 8}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 8}
+  - name: t5_unshared_sandwich_fix_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: rms_sandwich, n_prelude: 0, k: 1, core_shared: false,
+            injection: none, state_init: embed, n_coda: 0}
+    depth: {rule: fixed, T: 8}
+    optim: {lr_schedule: tail, decay_frac: 0.3, decay_to: 0.01, clip_grad_norm: 1.0}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 8}
+  - name: t5_ut_sandwich_const_p113_h3_x6_s42
+    data: p113_h3_x6
+    seed: 42
+    model: {pos: none, norm: rms_sandwich, n_prelude: 0, k: 1, core_shared: true,
+            injection: none, state_init: embed, n_coda: 0}
+    depth: {rule: fixed, T: 8}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}
+  - name: t5_ut_sandwich_fix_p113_h3_x6_s42
+    data: p113_h3_x6
+    seed: 42
+    model: {pos: none, norm: rms_sandwich, n_prelude: 0, k: 1, core_shared: true,
+            injection: none, state_init: embed, n_coda: 0}
+    depth: {rule: fixed, T: 8}
+    optim: {lr_schedule: tail, decay_frac: 0.3, decay_to: 0.01, clip_grad_norm: 1.0}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}
+  - name: t5_unshared_sandwich_const_p113_h3_x6_s42
+    data: p113_h3_x6
+    seed: 42
+    model: {pos: none, norm: rms_sandwich, n_prelude: 0, k: 1, core_shared: false,
+            injection: none, state_init: embed, n_coda: 0}
+    depth: {rule: fixed, T: 8}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 8}
+  - name: t5_unshared_sandwich_fix_p113_h3_x6_s42
+    data: p113_h3_x6
+    seed: 42
+    model: {pos: none, norm: rms_sandwich, n_prelude: 0, k: 1, core_shared: false,
+            injection: none, state_init: embed, n_coda: 0}
+    depth: {rule: fixed, T: 8}
+    optim: {lr_schedule: tail, decay_frac: 0.3, decay_to: 0.01, clip_grad_norm: 1.0}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 8}
+
+  # parcae's diagonal injection on the huginn layout, under nanda's constant lr. parcae_nonorm has no norm layers at
+  # all: can a loop bounded by its injection instead of norms grok, and does it still collapse? parcae_sandwich is
+  # closer to parcae-decay (normalized injected input, block norms; sandwich here, prenorm in the paper) and is the
+  # with-norms control. parcae with the input norm but no block norms blew up in a smoke test (loss 12+ at step 60)
+  - name: t5_huginn_parcae_nonorm_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: none, n_prelude: 1, k: 1, core_shared: true,
+            injection: parcae_nonorm, state_init: random, n_coda: 1}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24, grad_iters: 4}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}
+  - name: t5_huginn_parcae_sandwich_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: rms_sandwich, n_prelude: 1, k: 1, core_shared: true,
+            injection: parcae, state_init: random, n_coda: 1}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24, grad_iters: 4}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}
+  - name: t5_huginn_parcae_nonorm_p113_h3_x6_s42
+    data: p113_h3_x6
+    seed: 42
+    model: {pos: none, norm: none, n_prelude: 1, k: 1, core_shared: true,
+            injection: parcae_nonorm, state_init: random, n_coda: 1}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24, grad_iters: 4}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}
+  - name: t5_huginn_parcae_sandwich_p113_h3_x6_s42
+    data: p113_h3_x6
+    seed: 42
+    model: {pos: none, norm: rms_sandwich, n_prelude: 1, k: 1, core_shared: true,
+            injection: parcae, state_init: random, n_coda: 1}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24, grad_iters: 4}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}
+
+  # positive control for depth: 2 distinct sandwich layers, the depth power et al. 2022 grokked with on nearly
+  # nanda's optimizer. if this doesn't grok under the fixed recipe, suspect the depth > 1 code path
+  - name: t5_unshared_sandwich_L2_const_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: rms_sandwich, n_prelude: 0, k: 1, core_shared: false,
+            injection: none, state_init: embed, n_coda: 0}
+    depth: {rule: fixed, T: 2}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 2}
+  - name: t5_unshared_sandwich_L2_fix_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: rms_sandwich, n_prelude: 0, k: 1, core_shared: false,
+            injection: none, state_init: embed, n_coda: 0}
+    depth: {rule: fixed, T: 2}
+    optim: {lr_schedule: tail, decay_frac: 0.3, decay_to: 0.01, clip_grad_norm: 1.0}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 2}
+  - name: t5_unshared_sandwich_L2_const_p113_h3_x6_s42
+    data: p113_h3_x6
+    seed: 42
+    model: {pos: none, norm: rms_sandwich, n_prelude: 0, k: 1, core_shared: false,
+            injection: none, state_init: embed, n_coda: 0}
+    depth: {rule: fixed, T: 2}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 2}
+  - name: t5_unshared_sandwich_L2_fix_p113_h3_x6_s42
+    data: p113_h3_x6
+    seed: 42
+    model: {pos: none, norm: rms_sandwich, n_prelude: 0, k: 1, core_shared: false,
+            injection: none, state_init: embed, n_coda: 0}
+    depth: {rule: fixed, T: 2}
+    optim: {lr_schedule: tail, decay_frac: 0.3, decay_to: 0.01, clip_grad_norm: 1.0}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 2}
+
+  # two-phase recipe from scratch: nanda's constant lr with no clipping until the tail decay starts at 14k, then
+  # clipping at 1.0 and the linear lr decay together for the last 30%. the branch result (clip + decay after
+  # grokking) as one schedule; clipping from step 0 blocked grokking in the t5 fix runs
+  - name: t6_huginn_twophase_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: rms_sandwich, n_prelude: 1, k: 1, core_shared: true,
+            injection: concat, state_init: random, n_coda: 1}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24, grad_iters: 4}
+    optim: {lr_schedule: tail, decay_frac: 0.3, decay_to: 0.01, clip_grad_norm: 1.0, clip_start: decay}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}
+  - name: t6_ut_statenorm_twophase_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: none, n_prelude: 0, k: 1, core_shared: true,
+            injection: none, state_init: embed, n_coda: 0, state_norm: true}
+    depth: {rule: fixed, T: 8}
+    optim: {lr_schedule: tail, decay_frac: 0.3, decay_to: 0.01, clip_grad_norm: 1.0, clip_start: decay}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}
+  - name: t6_ut_sandwich_twophase_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: rms_sandwich, n_prelude: 0, k: 1, core_shared: true,
+            injection: none, state_init: embed, n_coda: 0}
+    depth: {rule: fixed, T: 8}
+    optim: {lr_schedule: tail, decay_frac: 0.3, decay_to: 0.01, clip_grad_norm: 1.0, clip_start: decay}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}
+
+  # is injection alone enough to learn a fixed point at fixed depth? state-norm ut (no prelude/coda) + concat
+  # injection from an embedding start, fixed T = 8, two-phase recipe; optionally + truncated backprop (huginn's
+  # other suspect). the fixed-depth huginn holds an input-dependent fixed point only through injection
+  - name: t7_ut_statenorm_inject_twophase_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: none, n_prelude: 0, k: 1, core_shared: true,
+            injection: concat, state_init: embed, n_coda: 0, state_norm: true}
+    depth: {rule: fixed, T: 8}
+    optim: {lr_schedule: tail, decay_frac: 0.3, decay_to: 0.01, clip_grad_norm: 1.0, clip_start: decay}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}
+  - name: t7_ut_statenorm_inject_trunc_twophase_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: none, n_prelude: 0, k: 1, core_shared: true,
+            injection: concat, state_init: embed, n_coda: 0, state_norm: true}
+    depth: {rule: fixed, T: 8, grad_iters: 4}
+    optim: {lr_schedule: tail, decay_frac: 0.3, decay_to: 0.01, clip_grad_norm: 1.0, clip_start: decay}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}
+
+  # decay-off recipe: nanda's recipe (constant lr, weight decay 1, no clipping) until 14k, then weight decay off.
+  # mirrors the t6 two-phase runs with one change instead of two; the grokked-checkpoint branch with weight decay 0
+  # held its solution
+  - name: t8_huginn_wdoff_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: rms_sandwich, n_prelude: 1, k: 1, core_shared: true,
+            injection: concat, state_init: random, n_coda: 1}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24, grad_iters: 4}
+    optim: {wd_off_at: 14000}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}
+  - name: t8_ut_statenorm_wdoff_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: none, n_prelude: 0, k: 1, core_shared: true,
+            injection: none, state_init: embed, n_coda: 0, state_norm: true}
+    depth: {rule: fixed, T: 8}
+    optim: {wd_off_at: 14000}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}
+  - name: t8_ut_sandwich_wdoff_p113_h3_x6_s41
+    data: p113_h3_x6
+    seed: 41
+    model: {pos: none, norm: rms_sandwich, n_prelude: 0, k: 1, core_shared: true,
+            injection: none, state_init: embed, n_coda: 0}
+    depth: {rule: fixed, T: 8}
+    optim: {wd_off_at: 14000}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}
+
+  # seed 42 of the two-phase runs, for the closing plan's robustness check
+  - name: t6_huginn_twophase_p113_h3_x6_s42
+    data: p113_h3_x6
+    seed: 42
+    model: {pos: none, norm: rms_sandwich, n_prelude: 1, k: 1, core_shared: true,
+            injection: concat, state_init: random, n_coda: 1}
+    depth: {rule: sampled, mean: 8, sigma: 0.5, cap: 24, grad_iters: 4}
+    optim: {lr_schedule: tail, decay_frac: 0.3, decay_to: 0.01, clip_grad_norm: 1.0, clip_start: decay}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}
+  - name: t6_ut_statenorm_twophase_p113_h3_x6_s42
+    data: p113_h3_x6
+    seed: 42
+    model: {pos: none, norm: none, n_prelude: 0, k: 1, core_shared: true,
+            injection: none, state_init: embed, n_coda: 0, state_norm: true}
+    depth: {rule: fixed, T: 8}
+    optim: {lr_schedule: tail, decay_frac: 0.3, decay_to: 0.01, clip_grad_norm: 1.0, clip_start: decay}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}
+  - name: t6_ut_sandwich_twophase_p113_h3_x6_s42
+    data: p113_h3_x6
+    seed: 42
+    model: {pos: none, norm: rms_sandwich, n_prelude: 0, k: 1, core_shared: true,
+            injection: none, state_init: embed, n_coda: 0}
+    depth: {rule: fixed, T: 8}
+    optim: {lr_schedule: tail, decay_frac: 0.3, decay_to: 0.01, clip_grad_norm: 1.0, clip_start: decay}
+    train: {steps: 20000, eval_every: 200, sweep_every: 2000, eval_T_max: 32}

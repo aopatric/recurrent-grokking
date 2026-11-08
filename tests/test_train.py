@@ -444,3 +444,75 @@ def test_metrics_truncation_drops_a_cut_off_last_line(tmp_path):
     path.write_text('{"step": 1}\n{"step": 2}\n{"step": 3, "kind"')
     train._truncate_metrics(path, 5)
     assert path.read_text() == '{"step": 1}\n{"step": 2}\n'
+
+
+def test_lr_multiplier_tail_and_default():
+    """the default schedule is warmup then constant; tail decays linearly over the last decay_frac of steps."""
+    op = {**train._OPTIM_DEFAULTS}
+    f = train.lr_multiplier(op, 100)
+    assert f(5) == 0.5 and f(10) == 1.0 and f(100) == 1.0
+    g = train.lr_multiplier({**op, "lr_schedule": "tail", "decay_frac": 0.5, "decay_to": 0.0}, 100)
+    assert g(50) == 1.0 and g(75) == pytest.approx(0.5) and g(100) == pytest.approx(0.0)
+
+
+def test_clipped_run_logs_the_pre_clip_norm(tmp_path, data_root):
+    """with clipping on, the logged grad_norm is the norm before clipping, which exceeds the clip."""
+    e = run_entry(optim={"clip_grad_norm": 1e-6, "lr_schedule": "tail"})
+    run_dir = train.train(e, config(tmp_path, data_root, e), "cpu", log=quiet)
+    rows = [json.loads(ln) for ln in (run_dir / "steps.jsonl").read_text().splitlines()]
+    assert all(r["grad_norm"] > 1e-6 for r in rows)
+
+
+@pytest.mark.parametrize("over, msg", [
+    ({"optim": {"lr_schedule": "cosine"}}, "lr_schedule"),
+    ({"optim": {"decay_frac": 0.0}}, "decay_frac"),
+    ({"optim": {"clip_grad_norm": -1}}, "clip_grad_norm"),
+])
+def test_bad_optim_settings(over, msg):
+    """invalid schedule and clipping settings are rejected."""
+    with pytest.raises(train.RunConfigError, match=msg):
+        train.validate_entry(run_entry(**over))
+
+
+def test_clip_start_delays_clipping(tmp_path, data_root):
+    """with clip_start, steps before it run unclipped and steps from it on are clipped: the logged pre-clip norm
+    is the same either way, but the update only shrinks once clipping is on."""
+    base = {"clip_grad_norm": 1e-6, "lr_schedule": "tail", "decay_frac": 0.5}
+    rows = {}
+    for tag, extra in (("off", {"clip_grad_norm": None}), ("late", {"clip_start": "decay"}), ("all", {})):
+        e = run_entry(name=tag, optim={**base, **extra})
+        run_dir = train.train(e, config(tmp_path, data_root, e), "cpu", log=quiet)
+        rows[tag] = [json.loads(ln) for ln in (run_dir / "steps.jsonl").read_text().splitlines()]
+    upd = lambda r: r["groups"]["core"]["update"]  # noqa: E731
+    # 6 steps, decay over the last half: steps 1-3 unclipped, 4-6 clipped
+    assert [upd(r) for r in rows["late"][:3]] == pytest.approx([upd(r) for r in rows["off"][:3]])
+    assert all(upd(a) < upd(b) for a, b in zip(rows["late"][3:], rows["off"][3:]))
+    # step 1 has lr 0 (warmup), so compare step 2
+    assert upd(rows["all"][1]) < upd(rows["off"][1])
+
+
+@pytest.mark.parametrize("cs", ["later", -1, True])
+def test_bad_clip_start(cs):
+    """clip_start takes null, "decay" or a non-negative step."""
+    with pytest.raises(train.RunConfigError, match="clip_start"):
+        train.validate_entry(run_entry(optim={"clip_start": cs}))
+
+
+def test_wd_off_at_stops_decay(tmp_path, data_root):
+    """after wd_off_at, steps match a run with no weight decay at all; before it, they match the decayed run."""
+    base = {"lr_schedule": "tail", "decay_frac": 0.5, "weight_decay": 50.0}
+    rows = {}
+    for tag, extra in (("on", {}), ("off_late", {"wd_off_at": "decay"}), ("none", {"weight_decay": 0.0})):
+        e = run_entry(name=tag, optim={**base, **extra})
+        run_dir = train.train(e, config(tmp_path, data_root, e), "cpu", log=quiet)
+        rows[tag] = [json.loads(ln)["groups"]["core"]["w"] for ln in (run_dir / "steps.jsonl").read_text().splitlines()]
+    # 6 steps, decay starts after step 3: identical to "on" through step 3, then shrinks less than "on"
+    assert rows["off_late"][:3] == pytest.approx(rows["on"][:3])
+    assert rows["off_late"][-1] > rows["on"][-1]
+
+
+@pytest.mark.parametrize("wo", ["soon", -2, False])
+def test_bad_wd_off_at(wo):
+    """wd_off_at takes null, "decay" or a non-negative step."""
+    with pytest.raises(train.RunConfigError, match="wd_off_at"):
+        train.validate_entry(run_entry(optim={"wd_off_at": wo}))
