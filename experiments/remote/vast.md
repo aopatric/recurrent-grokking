@@ -194,8 +194,6 @@ uv run python src/plot_progress.py vast-runs/t1_huginn_ref_p113_h3_x6_s41     # 
 | **in progress** | not grokked yet and short of the judged step (still training or paused) |
 | **fixed point** | looped runs only: the answer holds from the training depth out to 16 passes |
 
-**For one run in depth:** open `notebooks/run-analysis.ipynb` and set `RUN_DIR` to its folder. It rebuilds everything from the folder and analyses the last checkpoint (`step_0020000.pt` for a run stopped at 20k).
-
 The seeds vary initial weights, depth draws and random starts. Every run shares the dataset's single train/val split.
 
 **When everything is copied, destroy the instance on the vast.ai page.** A stopped instance still bills for disk.
