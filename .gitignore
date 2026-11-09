@@ -226,8 +226,16 @@ my-notes/
 CLAUDE.md
 
 # Generated data
-data/
+/data/
 
 # training runs
-runs/
-vast-runs/
+/runs/
+/vast-runs/
+
+# kept locally, not published
+notebooks/
+readings/
+src/imgs/
+
+# generated figures
+figures/out/

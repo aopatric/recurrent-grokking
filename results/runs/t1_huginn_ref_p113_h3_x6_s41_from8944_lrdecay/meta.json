@@ -1,0 +1,29 @@
+{
+  "git": {
+    "commit": "f23708c1b24650c313c2a19f629d71bb088cca96",
+    "dirty": true
+  },
+  "python": "3.12.14",
+  "torch": "2.14.1+cu130",
+  "device": "NVIDIA GeForce RTX 4090",
+  "branch": {
+    "source": "vast-runs/t1_huginn_ref_p113_h3_x6_s41",
+    "step": 8944,
+    "arm": "lrdecay",
+    "spec": {
+      "decay_to": 0.01
+    },
+    "steps": 4000,
+    "warmup": 100,
+    "optim": {
+      "lr": 0.001,
+      "weight_decay": 1.0,
+      "betas": [
+        0.9,
+        0.98
+      ],
+      "warmup_steps": 10,
+      "no_decay": []
+    }
+  }
+}

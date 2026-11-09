@@ -1,0 +1,26 @@
+name: t6_ut_sandwich_twophase_p113_h3_x6_s41
+data: p113_h3_x6
+seed: 41
+model:
+  pos: none
+  norm: rms_sandwich
+  n_prelude: 0
+  k: 1
+  core_shared: true
+  injection: none
+  state_init: embed
+  n_coda: 0
+depth:
+  rule: fixed
+  T: 8
+optim:
+  lr_schedule: tail
+  decay_frac: 0.3
+  decay_to: 0.01
+  clip_grad_norm: 1.0
+  clip_start: decay
+train:
+  steps: 20000
+  eval_every: 200
+  sweep_every: 2000
+  eval_T_max: 32

@@ -1,0 +1,20 @@
+name: t5_ut_sandwich_const_p113_h3_x6_s41
+data: p113_h3_x6
+seed: 41
+model:
+  pos: none
+  norm: rms_sandwich
+  n_prelude: 0
+  k: 1
+  core_shared: true
+  injection: none
+  state_init: embed
+  n_coda: 0
+depth:
+  rule: fixed
+  T: 8
+train:
+  steps: 20000
+  eval_every: 200
+  sweep_every: 2000
+  eval_T_max: 32

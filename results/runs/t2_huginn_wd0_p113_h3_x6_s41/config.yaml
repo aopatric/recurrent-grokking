@@ -1,0 +1,25 @@
+name: t2_huginn_wd0_p113_h3_x6_s41
+data: p113_h3_x6
+seed: 41
+model:
+  pos: none
+  norm: rms_sandwich
+  n_prelude: 1
+  k: 1
+  core_shared: true
+  injection: concat
+  state_init: random
+  n_coda: 1
+depth:
+  rule: sampled
+  mean: 8
+  sigma: 0.5
+  cap: 24
+  grad_iters: 4
+optim:
+  weight_decay: 0.0
+train:
+  steps: 40000
+  eval_every: 100
+  sweep_every: 1000
+  eval_T_max: 32

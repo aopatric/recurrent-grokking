@@ -1,0 +1,43 @@
+{
+  "git": {
+    "commit": "4f6a68d2d70af4e6ed07b6fd1a24899238e69f5c",
+    "dirty": false
+  },
+  "python": "3.12.3",
+  "torch": "2.14.1+cu130",
+  "device": "NVIDIA GeForce RTX 5090",
+  "data": {
+    "name": "p113_h3_x6",
+    "generator_version": "3.0.0",
+    "sha256": {
+      "extrap_depth.jsonl": "f17b728f29e61f8ed2896cd6d03794211e77cf7a97655a9b137135639446d136",
+      "grid_hop1.jsonl": "fab32cd99842d3e0e6af97b7f481a51be85e1a7ddc098f1afe68fb1efcfcfc4f",
+      "meta.json": "c0da51fbed80a4ae696132458f83fe95db672beaefc8452f5ce06fe2daa5d4cc",
+      "systematic.jsonl": "d048550aa03e1f49c598fe723d3ee65f74c04cb541fbc8a7f21491f19f693ad5",
+      "systematic_extrap.jsonl": "69654b3f02db712947eef8d1e84bcc720a427d465b880e20bc8d39e9e53b20c0",
+      "train.jsonl": "133822b35fccf7f285e3601483ca982775e5fd162a67c780b7da17fecb55202b",
+      "val.jsonl": "1f28bf2f4856edc82ec5a8ef22dadb05664ef69a3ac3298283dce0fde871f733",
+      "vocab.json": "71247b0296a62873c75f5604499925c7d363ea2e664daa9ea3a02b4477783c1a"
+    }
+  },
+  "model": {
+    "p": 113,
+    "pos": "none",
+    "n_ctx": 0,
+    "norm": "none",
+    "n_prelude": 1,
+    "k": 1,
+    "core_shared": true,
+    "n_core_copies": 1,
+    "injection": "none",
+    "state_init": "embed",
+    "n_coda": 1,
+    "state_norm": false,
+    "d_model": 128,
+    "num_heads": 4,
+    "d_head": 32,
+    "d_mlp": 512
+  },
+  "steps": 40000,
+  "max_steps": null
+}

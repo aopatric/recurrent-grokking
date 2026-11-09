@@ -1,7 +1,7 @@
 [project]
-name = "time-loops"
+name = "recurrent-grokking"
 version = "0.1.0"
-description = "The clock algorithm in looped transformers: how recurrent-depth models learn single- and multi-hop modular addition."
+description = "Looped (recurrent-depth) transformers on n-hop modular addition: when they grok, why grokked models collapse, and what the loop computes."
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "einops>=0.8.2",
